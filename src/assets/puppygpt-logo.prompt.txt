@@ -1,0 +1,10 @@
+Generated with the built-in imagegen tool.
+
+Use case: logo-brand
+Asset type: production app logo mark for PuppyGPT, a friendly AI chat and coding assistant.
+Primary request: create one beautiful, distinctive, minimalist puppy face logo, with soft floppy ears and a clever little smile. Warm, quietly confident, polished contemporary software brand. Refined geometric curves with a subtle chat-bubble shape integrated into the lower contour of the face, if it reads naturally.
+Style: crisp flat vector-like graphic, bold simple silhouette, exceptionally clean edges, balanced negative space, very few shapes. Recognizable at 22px. No thin detail.
+Color palette: muted dark sage green #526951 with light ivory #fcfcfa facial negative space, matching an understated ivory and sage interface.
+Composition: one centered standalone mark, square canvas, mark fills about 85% of canvas, modest even padding.
+Background: genuinely transparent alpha background.
+Constraints: no text, no lettering, no wordmark, no mockup, no presentation board, no extra symbols, no gradient, no shadow, no texture, no 3D, no watermark. Deliver a finished usable logo asset.
