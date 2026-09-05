@@ -1,0 +1,19 @@
+{
+  "defaultTarget": "docker",
+  "targets": [
+    { "id": "host", "kind": "host", "maxTimeoutMs": 120000 },
+    {
+      "id": "docker",
+      "kind": "docker",
+      "image": "puppygpt-exec:local",
+      "socketPath": "/var/run/docker.sock",
+      "workspaceRoot": "/absolute/path/to/workspace",
+      "network": "none",
+      "readOnly": false,
+      "memoryMb": 512,
+      "cpus": 1,
+      "pidsLimit": 128,
+      "maxTimeoutMs": 120000
+    }
+  ]
+}

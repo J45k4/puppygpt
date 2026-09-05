@@ -120,7 +120,7 @@ test("agent executes a tool call and sends its output back to Codex", async () =
         expect(bodies[0]!.instructions).not.toContain("Before starting work, read /work/AGENTS.md")
         const tool = (bodies[0]!.tools as JsonObject[])[0]!
         expect(tool.name).toBe("exec")
-        expect((tool.parameters as JsonObject).required).toEqual(["command", "timeout_ms"])
+        expect((tool.parameters as JsonObject).required).toEqual(["command", "timeout_ms", "target"])
         const secondInput = bodies[1]!.input as JsonObject[]
         const toolOutput = secondInput.find(item => item.type === "function_call_output")
         expect(String(toolOutput?.output)).toContain("hello")
@@ -1239,4 +1239,26 @@ test("steering an active turn backgrounds its exec command and reaches the next 
     } finally {
         await rm(directory, { recursive: true, force: true })
     }
+})
+
+test("agent exposes only runtime targets and rejects a model request for unauthorized host execution", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "puppygpt-target-policy-"))
+    const authFile = join(directory, "auth.json")
+    await Bun.write(authFile, JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: jwt({ exp: 2_000_000_000 }), refresh_token: "test-refresh" } }))
+    let requests = 0, executions = 0
+    try {
+        await runAgent({ cwd: directory, authFile, prompt: "Run a command", executionPolicy: { defaultTarget: "box", targets: [{ id: "box", kind: "docker", image: "test:local", workspaceRoot: directory }] },
+            execute: async () => { executions++; throw new Error("Must not execute") },
+            fetchImpl: async (_url, init) => {
+                const body = JSON.parse(String(init?.body))
+                if (requests++ === 0) {
+                    expect(body.tools[0].parameters.properties.target.enum).toEqual(["box"])
+                    return sse([{ type: "response.output_item.done", item: { type: "function_call", call_id: "denied", name: "exec", arguments: JSON.stringify({ target: "host", command: "echo escape", timeout_ms: null }) } }, { type: "response.completed", response: {} }])
+                }
+                expect(JSON.stringify(body.input)).toContain("Execution target is not allowed: host")
+                return sse([{ type: "response.output_item.done", item: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Host is unavailable." }] } }, { type: "response.completed", response: {} }])
+            },
+        })
+        expect(executions).toBe(0)
+    } finally { await rm(directory, { recursive: true, force: true }) }
 })

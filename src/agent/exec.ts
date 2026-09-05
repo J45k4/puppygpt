@@ -16,6 +16,7 @@ export type ExecOutputChunk = {
 
 export type ExecInput = {
     command: string
+    target?: string
     cwd: string
     callId?: string
     outputDirectory?: string
@@ -26,6 +27,7 @@ export type ExecInput = {
 }
 
 export type ExecResult = {
+    target?: string
     exitCode: number | null
     stdout: string
     stderr: string
@@ -67,7 +69,14 @@ const resultDirectoryName = (callId: string): string => {
 
 const shellQuote = (value: string): string => `'${value.replaceAll("'", `'"'"'`)}'`
 
-export const runExec = async (input: ExecInput): Promise<ExecResult> => {
+export type ProcessOptions = { argv: string[], env?: Record<string, string | undefined>, onTerminate?: () => Promise<void>, exitCode?: (code: number) => Promise<number> }
+
+export const runExec = (input: ExecInput): Promise<ExecResult> => {
+    if (input.target && input.target !== "host") throw new Error("Execution target is not configured")
+    return runProcess(input, { argv: ["bash", "-c", input.command] })
+}
+
+export const runProcess = async (input: ExecInput, processOptions: ProcessOptions): Promise<ExecResult> => {
     input.signal?.throwIfAborted()
     const timeoutMs = Math.min(Math.max(input.timeoutMs ?? DEFAULT_TIMEOUT_MS, 100), MAX_TIMEOUT_MS)
     const startedAt = performance.now()
@@ -87,10 +96,10 @@ export const runExec = async (input: ExecInput): Promise<ExecResult> => {
     try {
         input.signal?.throwIfAborted()
         subprocess = Bun.spawn({
-            cmd: ["bash", "-c", input.command],
+            cmd: processOptions.argv,
             cwd: input.cwd,
             detached: true,
-            env: process.env,
+            env: processOptions.env ?? process.env,
             stdin: "ignore",
             stdout: "pipe",
             stderr: "pipe",
@@ -99,9 +108,12 @@ export const runExec = async (input: ExecInput): Promise<ExecResult> => {
         await outputFile.close()
         throw error
     }
+    let termination: Promise<void> | undefined
     let timedOut = false
     let aborted = false
     const kill = () => {
+        termination ??= processOptions.onTerminate?.()
+        void termination?.catch(() => {})
         try {
             process.kill(-subprocess.pid, "SIGKILL")
         } catch {
@@ -184,6 +196,7 @@ export const runExec = async (input: ExecInput): Promise<ExecResult> => {
             ])
             await outputWrite
             await liveOutputWrite
+            await termination
         } finally {
             clearTimeout(timer)
             input.signal?.removeEventListener("abort", abort)
@@ -192,8 +205,10 @@ export const runExec = async (input: ExecInput): Promise<ExecResult> => {
         if (aborted) {
             throw new DOMException("Agent turn was cancelled", "AbortError")
         }
+        if (!timedOut && processOptions.exitCode) exitCode = await processOptions.exitCode(exitCode)
         const result: ExecResult = {
             exitCode,
+            target: input.target ?? "host",
             stdout: previews.stdout,
             stderr: previews.stderr,
             stdoutBytes: outputBytes.stdout,
@@ -238,6 +253,7 @@ export const runExec = async (input: ExecInput): Promise<ExecResult> => {
     })
     return {
         exitCode: null,
+        target: input.target ?? "host",
         stdout: previews.stdout,
         stderr: previews.stderr,
         stdoutBytes: outputBytes.stdout,

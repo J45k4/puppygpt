@@ -8,6 +8,8 @@ export type ChatMessage = {
 }
 
 export type ChatSummary = {
+    executionTarget?: string
+    environmentId?: string
     accountId?: string | null
     id: string
     title: string
@@ -19,4 +21,4 @@ export type ChatSummary = {
 
 export type Chat = ChatSummary & { messages: ChatMessage[] }
 
-export type AppConfig = { cwd: string, authAvailable: boolean, settings: import("./settings").Settings }
+export type AppConfig = { execution: { environments: import("./environments").Environment[], defaultEnvironmentId: string, defaultTarget: string, targets: { id: string, kind: "host" | "docker" }[] }, cwd: string, authAvailable: boolean, settings: import("./settings").Settings }

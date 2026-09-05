@@ -6,6 +6,8 @@ import { resolveAuthFile } from "./agent/auth"
 import { extractOutputText } from "./agent/responses"
 import type { Chat, ChatSummary, AppConfig } from "./chat-types"
 import { defaultSettings, MODELS, validateSettings, type Settings } from "./settings"
+import { hostPolicy, selectTarget, validatePolicy } from "./agent/execution-targets"
+import { EnvironmentStore } from "./environments"
 import { AccountStore } from "./accounts"
 
 type Snapshot = ReturnType<AgentSession["contextSnapshot"]>
@@ -13,6 +15,7 @@ type Row = { data: string, context: string | null }
 
 export class ChatStore {
     readonly accounts: AccountStore
+    readonly environments: EnvironmentStore
     private sessions = new Map<string, AgentSession>()
     private live = new Map<string, Chat>()
     private listeners = new Set<(chat: Chat) => void>()
@@ -20,6 +23,7 @@ export class ChatStore {
     private tasks = new Set<Promise<void>>()
 
     constructor(private db: Database, readonly cwd: string, private agentOptions: AgentTurnOptions = {}, accountDirectory = resolve(cwd, ".puppygpt", "accounts")) {
+        this.environments = new EnvironmentStore(db, agentOptions.executionPolicy ?? hostPolicy)
         this.accounts = new AccountStore(db, accountDirectory, agentOptions)
         db.run("PRAGMA journal_mode = WAL")
         db.run("CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id = 1), data TEXT NOT NULL)")
@@ -39,7 +43,8 @@ export class ChatStore {
         let authAvailable = false
         try { authAvailable = this.settings().accountId ? !!await this.accounts.credentials(this.settings().accountId!).read() : await Bun.file(resolveAuthFile(this.agentOptions.authFile)).exists() } catch {}
         const settings = this.settings()
-        return { cwd: settings.cwd, authAvailable, settings }
+        const policy = this.agentOptions.executionPolicy ?? hostPolicy
+        return { cwd: settings.cwd, authAvailable, settings, execution: { environments: await this.environments.reconcileAll(), defaultEnvironmentId: this.environments.defaultId(), defaultTarget: policy.defaultTarget, targets: policy.targets.map(({ id, kind }) => ({ id, kind })) } }
     }
 
     settings(): Settings {
@@ -72,15 +77,34 @@ export class ChatStore {
         return row ? JSON.parse(row.data) : undefined
     }
 
-    async create(cwd = this.settings().cwd, model = this.settings().model): Promise<Chat> {
+    async create(cwd = this.settings().cwd, model = this.settings().model, executionTarget?: string, environmentId?: string): Promise<Chat> {
         const directory = await realpath(resolve(cwd))
         if (!(await stat(directory)).isDirectory()) throw new Error("Choose an existing workspace directory")
         if (!MODELS.some(item => item.id === model)) throw new Error("Unsupported model")
         const chat: Chat = { id: crypto.randomUUID(), title: "New chat", cwd: directory, model, status: "idle", updatedAt: new Date().toISOString(), messages: [] }
+        chat.executionTarget = selectTarget(this.agentOptions.executionPolicy ?? hostPolicy, executionTarget).id
+        chat.environmentId = environmentId ?? this.environments.defaultId(chat.executionTarget)
+        chat.executionTarget = this.environments.require(chat.environmentId).target.id
         chat.accountId = this.settings().accountId ?? null
         if (chat.accountId) this.accounts.authFile(chat.accountId)
         this.save(chat)
         this.publish(chat)
+        return chat
+    }
+
+    setExecutionTarget(id: string, targetId: string): Chat { return this.setEnvironment(id, this.environments.defaultId(targetId)) }
+
+    setEnvironment(id: string, environmentId: string): Chat {
+        const chat = this.get(id)
+        if (!chat) throw new Error("Chat not found")
+        if (chat.status === "running" || this.sessions.get(id)?.active) throw new Error("Wait for the current turn to finish before changing execution target")
+        const {target} = this.environments.require(environmentId)
+        chat.executionTarget = target.id
+        chat.environmentId = environmentId
+        chat.updatedAt = new Date().toISOString()
+        this.sessions.delete(id)
+        this.live.set(id, chat)
+        this.save(chat); this.publish(chat)
         return chat
     }
 
@@ -105,13 +129,16 @@ export class ChatStore {
     send(id: string, prompt: string): Chat {
         const chat = this.get(id)
         if (!chat) throw new Error("Chat not found")
+        const environmentId = chat.environmentId ?? this.environments.defaultId(chat.executionTarget)
+        const {target} = this.environments.require(environmentId)
+        const executionPolicy = { defaultTarget: target.id, targets: [target] }
         const authStorage = chat.accountId ? this.accounts.credentials(chat.accountId) : undefined
         const authFile = this.agentOptions.authFile
         if (!prompt.trim() || prompt.length > 64_000) throw new Error("Enter a message of 1–64,000 characters")
         let session = this.sessions.get(id)
         if (!session) {
             const row = this.db.query<Row, [string]>("SELECT data, context FROM chats WHERE id = ?").get(id)
-            session = new AgentSession({ ...this.agentOptions, authFile, authStorage, cwd: chat.cwd, model: chat.model }, row?.context ? JSON.parse(row.context) : undefined)
+            session = new AgentSession({ ...this.agentOptions, execute: this.agentOptions.execute ?? (input => this.environments.execute(environmentId, input)), executionPolicy, authFile, authStorage, cwd: chat.cwd, model: chat.model }, row?.context ? JSON.parse(row.context) : undefined)
             this.sessions.set(id, session)
         }
         if (chat.status === "running" && !session.active) throw new Error("This turn is finishing. Try again in a moment.")
@@ -185,7 +212,7 @@ export class ChatStore {
                 message = { id, role: "activity", text: "", running: true }
                 chat.messages.push(message)
             }
-            message.text = event.type === "tool_start" ? event.command : event.type === "image_start" ? `Viewing ${event.path}` : event.type === "imagegen_start" ? "Generating image" : "Searching the web"
+            message.text = event.type === "tool_start" ? `[${event.target ?? "host"}] ${event.command}` : event.type === "image_start" ? `Viewing ${event.path}` : event.type === "imagegen_start" ? "Generating image" : "Searching the web"
             if (event.type === "imagegen_start") message.detail = event.prompt
             if (event.type === "web_search") message.running = event.status !== "completed"
         } else if (event.type === "tool_output") {
@@ -236,7 +263,9 @@ export const openChatStore = async () => {
     await mkdir(dirname(databasePath), { recursive: true, mode: 0o700 })
     const db = new Database(databasePath, { create: true })
     await chmod(databasePath, 0o600)
-    const store = new ChatStore(db, resolve(process.env.PUPPYGPT_WORKDIR ?? process.cwd()), { maxRetries: 3 }, resolve(dirname(databasePath), "accounts"))
+    const policyPath = process.env.PUPPYGPT_EXECUTION_CONFIG
+    const executionPolicy = policyPath ? validatePolicy(await Bun.file(resolve(policyPath)).json()) : hostPolicy
+    const store = new ChatStore(db, resolve(process.env.PUPPYGPT_WORKDIR ?? process.cwd()), { maxRetries: 3, executionPolicy }, resolve(dirname(databasePath), "accounts"))
     await store.accounts.migrateCredentials()
     return store
 }

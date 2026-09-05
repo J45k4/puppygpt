@@ -55,3 +55,60 @@ bun start      # Production server
 bun test       # Agent and chat API regression tests
 bun run check  # TypeScript checks
 ```
+
+## Environments
+
+Choose **Environment** in the chat composer. **Manage** and the sidebar
+**Environments** link open `/environments`, with Create, Start, Stop, and Delete actions. Multiple chats can select
+the same environment. A chat stores `environmentId`; environment records live in
+the SQLite `execution_environments` table with a runtime target ID, adapter handle,
+status, creation time, and last-used time. Deleting or switching a chat never
+removes its environment.
+
+Runtime target definitions currently serve as creation templates. Copy
+`execution.example.json` to `.puppygpt/execution.json`, choose an already installed
+image and absolute workspace root, then start with:
+
+```sh
+PUPPYGPT_EXECUTION_CONFIG=.puppygpt/execution.json bun run dev
+```
+
+The runtime creates a default environment record for each configured target.
+Docker records start stopped: use **Start** before sending commands. Host is a
+built-in environment. Remove host from runtime configuration to prohibit host
+execution. Only the chat's selected environment target is exposed to the agent.
+
+Docker environments use long-running containers and `docker exec`. Their writable
+container filesystem, user-installed tools, and services survive commands; files
+also survive stop/start and app restart. The configured workspace is mounted at
+`/workspace`; its `.puppygpt` directory is masked. Other workspace files are visible.
+Deleting the environment deletes its container filesystem but preserves mounted
+workspace files. There is no automatic deletion or recreation on command completion,
+chat changes, app shutdown, or missing-container detection.
+
+Images must provide `/bin/sh`, `sleep infinity`, and util-linux `setsid --wait`.
+Containers run as the runtime UID/GID, with capabilities dropped, no privilege
+escalation, and configured CPU/memory/PID limits. Network defaults to none. The
+runtime does not forward its environment variables or Docker socket into containers.
+Docker requires CLI and local Unix socket access; the app never invokes sudo.
+No images are pulled automatically. The runtime's target image, mounts, and resource
+policy are checked against the saved environment configuration; changed policies
+make existing environments unavailable until their original configuration is restored.
+
+Concurrent commands share files and services. Each command has a separate process
+group; cancellation/timeout kills that group without stopping the environment or
+other commands. Commands that intentionally detach into a different process group
+are not covered by that cancellation boundary. Stop/Delete is refused while this
+runtime is executing commands in the environment. Environment-backed commands stay
+in the foreground when steering arrives. Full output logs are stored on the host.
+
+The runtime reconciles saved container handles with Docker when environments are
+listed or used, verifies ownership labels, and reports stopped, missing, or
+unavailable environments. It never silently recreates a missing environment.
+Creation errors may leave a stopped/missing record for explicit deletion. Keep
+runtime configuration outside agent-writable mounts. These controls cover exec;
+image tools and the development server still operate on the host. An app running
+from agent-writable source is not a complete agent sandbox.
+
+Standalone `createExecutor` remains available for temporary per-command containers;
+the web app routes commands through the persistent EnvironmentStore instead.

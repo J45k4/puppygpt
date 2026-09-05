@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { getFreshAuth, type AgentAuth, type AuthStorage } from "./auth"
-import { runExec, type ExecInput, type ExecOutputChunk, type ExecResult } from "./exec"
+import { createExecutor, hostPolicy, selectTarget, targetDescription, validatePolicy, type ExecutionPolicy } from "./execution-targets"
+import { type ExecInput, type ExecOutputChunk, type ExecResult } from "./exec"
 import { viewImage, type ViewedImage } from "./image"
 import { generateImage, IMAGEGEN_TOOL, parseImagegenArgs, type ImagegenArgs } from "./imagegen"
 import { extractOutputText, HttpError, RetryableResponseError, RetryableTransportError, streamCodexResponse } from "./responses"
@@ -88,6 +89,7 @@ export type RunAgentOptions = {
     maxSteps?: number
     contextWindow?: number
     fetchImpl?: FetchLike
+    executionPolicy?: ExecutionPolicy
     execute?: (input: ExecInput) => Promise<ExecResult>
     inspectImage?: (path: string, workdir?: string) => Promise<ViewedImage>
     onToolCall?: (command: string) => void
@@ -104,7 +106,7 @@ export type AgentInteraction =
     | { type: "compaction_start", compactionId: string, reason: "auto" | "context_overflow", contextTokens?: number }
     | { type: "compaction_complete", compactionId: string, reason: "auto" | "context_overflow", contextTokens?: number, retainedUserMessages: number }
     | { type: "compaction_error", compactionId: string, reason: "auto" | "context_overflow", contextTokens?: number, error: string }
-    | { type: "tool_start", step: number, callId: string, command: string }
+    | { type: "tool_start", step: number, callId: string, command: string, target?: string }
     | { type: "tool_output", step: number, callId: string, chunk: ExecOutputChunk }
     | { type: "tool_result", step: number, callId: string, command: string, result: ExecResult }
     | { type: "tool_error", step: number, callId: string, error: string }
@@ -189,7 +191,7 @@ const waitForRetry = async (delayMs: number, signal: AbortSignal): Promise<void>
 }
 
 type ParsedFunctionCall =
-    | { callId: string, name: "exec", command: string, timeoutMs?: number }
+    | { callId: string, name: "exec", command: string, target?: string, timeoutMs?: number }
     | { callId: string, name: "view_image", path: string }
     | { callId: string, name: "imagegen", args: ImagegenArgs }
 
@@ -213,7 +215,8 @@ const parseFunctionCall = (item: JsonObject): ParsedFunctionCall => {
     if (!command) {
         throw new Error("exec requires a non-empty command")
     }
-    return { callId, name, command, timeoutMs: asNumber(parsed?.timeout_ms) }
+    if (parsed?.target !== undefined && (typeof parsed.target !== "string" || !parsed.target)) throw new Error("Invalid exec target")
+    return { callId, name, command, target: asString(parsed?.target), timeoutMs: asNumber(parsed?.timeout_ms) }
 }
 
 const toolError = (error: unknown): string => `Tool could not be executed: ${error instanceof Error ? error.message : String(error)}`
@@ -224,7 +227,7 @@ export const formatExecResult = (result: ExecResult): string => {
         : result.timedOut
             ? `Command timed out after ${(result.durationMs / 1000).toFixed(1)}s with exit code ${result.exitCode}.`
             : `Command finished with exit code ${result.exitCode} in ${(result.durationMs / 1000).toFixed(1)}s.`
-    const lines = [status]
+    const lines = [result.target ? `Execution target: ${result.target}` : "", status].filter(Boolean)
     if (result.stdout) {
         lines.push("", "Stdout preview:", result.stdout)
     }
@@ -347,10 +350,14 @@ export class AgentSession {
 
     private async runTurn(options: AgentTurnOptions, signal: AbortSignal): Promise<string> {
         const cwd = resolve(options.cwd ?? process.env.PUPPYGPT_WORKDIR ?? process.cwd())
-        const tools = [EXEC_TOOL, viewImageTool(cwd), WEB_SEARCH_TOOL, IMAGEGEN_TOOL]
+        const policy = validatePolicy(options.executionPolicy ?? hostPolicy)
+        const execTool = { ...EXEC_TOOL, description: `Execute a shell command on a runtime-approved target. Allowed targets: ${targetDescription(policy)}. Default: ${policy.defaultTarget}. Host commands can background on steering; Docker commands finish or time out. Docker paths are container paths; reported output files are on the host.`, parameters: {
+            ...asObject(EXEC_TOOL.parameters), properties: { ...asObject(asObject(EXEC_TOOL.parameters)?.properties), target: { type: "string", enum: policy.targets.map(t => t.id), description: "Runtime-approved execution target" } }, required: ["command", "timeout_ms", "target"],
+        } }
+        const tools = [execTool, viewImageTool(cwd), WEB_SEARCH_TOOL, IMAGEGEN_TOOL]
         const fetchImpl = options.fetchImpl ?? fetch
         const endpoint = options.endpoint ?? process.env.PUPPYGPT_CODEX_ENDPOINT ?? DEFAULT_ENDPOINT
-        const execute = options.execute ?? runExec
+        const execute = options.execute ?? createExecutor(policy)
         const inspectImage = options.inspectImage ?? viewImage
         let auth = await getFreshAuth({
             authFile: options.authFile, authStorage: options.authStorage,
@@ -655,6 +662,7 @@ export class AgentSession {
                         this.input.push({ type: "function_call_output", call_id: callId, output })
                         continue
                     }
+                    const target = selectTarget(policy, parsed.target)
                     const command = parsed.command
                     options.onToolCall?.(command)
                     const backgroundController = new AbortController()
@@ -663,15 +671,17 @@ export class AgentSession {
                     try {
                         await options.onInteraction?.({
                             type: "tool_start",
+                            target: target.id,
                             step: step + 1,
                             callId,
                             command,
                         })
                         result = await execute({
+                            target: target.id,
                             command,
                             cwd,
                             callId,
-                            timeoutMs: parsed.timeoutMs,
+                            timeoutMs: Math.min(parsed.timeoutMs ?? 120_000, target.maxTimeoutMs ?? 600_000),
                             signal,
                             backgroundSignal: backgroundController.signal,
                             onOutput: chunk => options.onInteraction?.({
