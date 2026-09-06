@@ -1,51 +1,53 @@
 import { useEffect, useRef, useState } from "react"
+import { Terminal } from "@xterm/xterm"
+import { FitAddon } from "@xterm/addon-fit"
+import "@xterm/xterm/css/xterm.css"
 
 export function EnvironmentShell({ id, ready }: { id: string, ready: boolean }) {
-    const [command, setCommand] = useState("")
-    const [output, setOutput] = useState("")
-    const [running, setRunning] = useState(false)
-    const controller = useRef<AbortController | null>(null)
-    const terminal = useRef<HTMLPreElement>(null)
-    useEffect(() => () => controller.current?.abort(), [])
-    useEffect(() => { terminal.current?.scrollTo(0, terminal.current.scrollHeight) }, [output])
-    const append = (text: string) => setOutput(previous => (previous + text).slice(-256_000))
-    const run = async () => {
-        if (running || !command.trim()) return
-        const abort = new AbortController()
-        controller.current = abort
-        setRunning(true)
-        append(`\n$ ${command}\n`)
-        try {
-            const response = await fetch(`/api/environments/${id}/shell`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ command }), signal: abort.signal })
-            if (!response.ok) throw new Error((await response.json()).error ?? "Shell request failed")
-            const reader = response.body!.getReader()
-            const decoder = new TextDecoder()
-            let pending = ""
-            while (true) {
-                const { value, done } = await reader.read()
-                pending += decoder.decode(value, { stream: !done })
-                const lines = pending.split("\n")
-                pending = lines.pop()!
-                for (const line of lines) {
-                    if (!line) continue
-                    const event = JSON.parse(line)
-                    if (event.type === "output") append(event.text)
-                    if (event.type === "error") append(`\nError: ${event.message}\n`)
-                    if (event.type === "done") append(`\n[${event.timedOut ? "Timed out" : `Exit ${event.exitCode}`}${event.truncated ? "; output truncated" : ""}]\n`)
-                }
-                if (done) break
-            }
-        } catch (error) { append(`\n${abort.signal.aborted ? "Command cancelled" : error instanceof Error ? error.message : "Shell failed"}\n`) }
-        finally { controller.current = null; setRunning(false) }
-    }
+    const mount = useRef<HTMLDivElement>(null)
+    const terminalRef = useRef<Terminal | null>(null)
+    const [connection, setConnection] = useState(0)
+    const [enabled, setEnabled] = useState(true)
+    const [status, setStatus] = useState("Connecting…")
+    useEffect(() => {
+        if (!ready || !enabled || !mount.current) return
+        let disposed = false
+        let connected = false
+        setStatus("Connecting…")
+        const terminal = new Terminal({ cursorBlink: true, fontSize: 14, fontFamily: '"SFMono-Regular", Consolas, monospace', scrollback: 5000, theme: { background: "#20231f", foreground: "#e5ecdf", cursor: "#a9ca91" }, allowProposedApi: false })
+        terminalRef.current = terminal
+        const fit = new FitAddon()
+        terminal.loadAddon(fit)
+        terminal.open(mount.current)
+        const url = new URL(`/api/environments/${id}/terminal`, location.href)
+        url.protocol = location.protocol === "https:" ? "wss:" : "ws:"
+        const socket = new WebSocket(url)
+        socket.binaryType = "arraybuffer"
+        const resize = () => {
+            if (disposed) return
+            fit.fit()
+            if (connected && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "resize", cols: Math.min(400, Math.max(2, terminal.cols)), rows: Math.min(200, Math.max(2, terminal.rows)) }))
+        }
+        const observer = new ResizeObserver(resize)
+        observer.observe(mount.current)
+        const input = terminal.onData(data => { if (connected && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "input", data })) })
+        socket.onmessage = event => {
+            if (disposed) return
+            if (event.data instanceof ArrayBuffer) { terminal.write(new Uint8Array(event.data)); return }
+            const message = JSON.parse(event.data)
+            if (message.type === "ready") { connected = true; setStatus("Connected"); resize(); terminal.focus() }
+            if (message.type === "error") { setStatus(message.message); terminal.writeln(`\r\n${message.message}`) }
+            if (message.type === "exit") { setStatus(`Shell exited (${message.code})`); terminal.writeln(`\r\n[Shell exited: ${message.code}]`) }
+        }
+        socket.onerror = () => { if (!disposed) setStatus("Terminal connection failed. Reconnect to try again.") }
+        socket.onclose = () => { connected = false; if (!disposed) setStatus(current => current === "Connected" || current === "Connecting…" ? "Disconnected — reconnect to open a new shell." : current) }
+        resize()
+        return () => { disposed = true; observer.disconnect(); input.dispose(); socket.close(); terminal.dispose(); terminalRef.current = null }
+    }, [id, ready, enabled, connection])
     return <section className="settings-card environment-shell" aria-labelledby="shell-title">
-        <div className="environment-toolbar"><h2 id="shell-title">Shell</h2><button type="button" onClick={() => setOutput("")}>Clear output</button></div>
-        <p className="settings-help">Commands run in this environment’s workspace. Each run starts a fresh shell; use one script for commands that share a directory or variables. Interactive terminal programs are not supported yet.</p>
-        <pre ref={terminal} className="environment-terminal" aria-label="Shell output" tabIndex={0}>{output || "Run a command to see its output here."}</pre>
-        <form onSubmit={event => { event.preventDefault(); void run() }}>
-            <label htmlFor="shell-command">Command</label>
-            <textarea id="shell-command" value={command} onChange={event => setCommand(event.target.value)} placeholder="pwd && ls -la" disabled={running} onKeyDown={event => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); if (ready) void run() } }} />
-            <div className="environment-toolbar"><p className="settings-help" role="status">{running ? "Running…" : ready ? "Ctrl+Enter to run" : "Start the environment to use its shell."}</p>{running ? <button type="button" onClick={() => controller.current?.abort()}>Stop command</button> : <button type="submit" disabled={!ready || !command.trim()}>Run command</button>}</div>
-        </form>
+        <div className="environment-toolbar"><h2 id="shell-title">Terminal</h2><div className="account-actions"><button type="button" disabled={!ready} onClick={() => terminalRef.current?.clear()}>Clear</button><button type="button" disabled={!ready || !enabled} onClick={() => { setEnabled(false); setStatus("Disconnected") }}>Disconnect</button><button type="button" disabled={!ready} onClick={() => { setEnabled(true); setConnection(value => value + 1) }}>Reconnect</button></div></div>
+        <p className="settings-help" role="status">{ready ? status : "Start the environment to open its terminal."}</p>
+        <div ref={mount} className="environment-xterm" aria-label="Interactive environment terminal" />
+        <p className="settings-help">Ctrl+C interrupts · Disconnect before stopping the environment · Closing this page ends the shell session.</p>
     </section>
 }

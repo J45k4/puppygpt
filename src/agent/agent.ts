@@ -10,7 +10,7 @@ import { extractOutputText, HttpError, RetryableResponseError, RetryableTranspor
 import { asNumber, asObject, asString, type FetchLike, type JsonObject } from "./types"
 
 const DEFAULT_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses"
-const DEFAULT_MODEL = "gpt-5.6-sol"
+const DEFAULT_MODEL = "gpt-6-astra"
 const DEFAULT_CONTEXT_WINDOWS: Record<string, number> = {
     "gpt-6-astra": 1_050_000,
     "gpt-5.6-sol": 272_000,
@@ -100,12 +100,13 @@ export type RunAgentOptions = {
 export type AgentTurnOptions = Omit<RunAgentOptions, "prompt">
 
 export type AgentInteraction =
+    | { type: "checkpoint", step: number, kind: "user" | "assistant", snapshot: ReturnType<AgentSession["contextSnapshot"]> }
     | { type: "text_delta", step: number, text: string }
     | { type: "request", step: number, body: JsonObject }
     | { type: "response", step: number, response: { id?: string, output: JsonObject[], usage?: JsonObject } }
-    | { type: "compaction_start", compactionId: string, reason: "auto" | "context_overflow", contextTokens?: number }
-    | { type: "compaction_complete", compactionId: string, reason: "auto" | "context_overflow", contextTokens?: number, retainedUserMessages: number }
-    | { type: "compaction_error", compactionId: string, reason: "auto" | "context_overflow", contextTokens?: number, error: string }
+    | { type: "compaction_start", compactionId: string, reason: "auto" | "context_overflow" | "manual", contextTokens?: number }
+    | { type: "compaction_complete", compactionId: string, reason: "auto" | "context_overflow" | "manual", contextTokens?: number, retainedUserMessages: number }
+    | { type: "compaction_error", compactionId: string, reason: "auto" | "context_overflow" | "manual", contextTokens?: number, error: string, cancelled?: boolean }
     | { type: "tool_start", step: number, callId: string, command: string, target?: string }
     | { type: "tool_output", step: number, callId: string, chunk: ExecOutputChunk }
     | { type: "tool_result", step: number, callId: string, command: string, result: ExecResult }
@@ -256,12 +257,30 @@ export const formatExecResult = (result: ExecResult): string => {
     return lines.join("\n")
 }
 
+export async function describeAgentContext(options: AgentTurnOptions) {
+    const cwd = resolve(options.cwd ?? process.env.PUPPYGPT_WORKDIR ?? process.cwd())
+    const policy = validatePolicy(options.executionPolicy ?? hostPolicy)
+    const execTool = { ...EXEC_TOOL, description: `Execute a shell command on a runtime-approved target. Allowed targets: ${targetDescription(policy)}. Default: ${policy.defaultTarget}. Host commands can background on steering; Docker commands finish or time out. Docker paths are container paths; reported output files are on the host.`, parameters: {
+        ...asObject(EXEC_TOOL.parameters), properties: { ...asObject(asObject(EXEC_TOOL.parameters)?.properties), target: { type: "string", enum: policy.targets.map(t => t.id), description: "Runtime-approved execution target" } }, required: ["command", "timeout_ms", "target"],
+    } }
+    const tools = [execTool, viewImageTool(cwd), WEB_SEARCH_TOOL, IMAGEGEN_TOOL]
+    const workspaceInstructions = options.loadWorkspaceInstructions
+        ? await options.loadWorkspaceInstructions()
+        : await readFile(join(cwd, "AGENTS.md"), "utf8").catch(error => {
+            if (error.code === "ENOENT") return ""
+            throw error
+        })
+    const instructions = [coreInstructions(cwd), options.instructions, workspaceInstructions].filter(Boolean).join("\n\n")
+    return { instructions, tools }
+}
+
 export class AgentSession {
     public readonly id: string = randomUUID()
     private readonly input: JsonObject[] = []
     private readonly steeringInput: JsonObject[] = []
     private activeController: AbortController | null = null
     private activeExecBackgroundController: AbortController | null = null
+    private compacting = false
     private activeContextTokens: number | undefined
     private modelLimits: Promise<Map<string, number>> | null = null
 
@@ -303,7 +322,7 @@ export class AgentSession {
     }
 
     public steer(prompt: string): boolean {
-        if (!this.activeController || this.activeController.signal.aborted || !prompt.trim()) {
+        if (this.compacting || !this.activeController || this.activeController.signal.aborted || !prompt.trim()) {
             return false
         }
         this.steeringInput.push({
@@ -336,6 +355,7 @@ export class AgentSession {
         })
         const failedTurnInput = [...this.input]
         try {
+            await options.onInteraction?.({ type: "checkpoint", step: 0, kind: "user", snapshot: this.contextSnapshot() })
             return await this.runTurn(options, controller.signal)
         } catch (error) {
             this.input.splice(0, this.input.length, ...failedTurnInput)
@@ -348,13 +368,29 @@ export class AgentSession {
         }
     }
 
-    private async runTurn(options: AgentTurnOptions, signal: AbortSignal): Promise<string> {
+    public async compact(options: AgentTurnOptions = {}): Promise<void> {
+        if (this.active) throw new Error("Wait for the current turn to finish before compacting")
+        if (!this.input.length) throw new Error("There is no agent context to compact")
+        const controller = new AbortController()
+        const before = this.contextSnapshot()
+        this.activeController = controller
+        this.compacting = true
+        try {
+            await this.runTurn({ ...this.options, ...options }, controller.signal, true)
+        } catch (error) {
+            this.input.splice(0, this.input.length, ...before.items)
+            this.activeContextTokens = before.contextTokens
+            throw error
+        } finally {
+            this.activeController = null
+            this.compacting = false
+        }
+    }
+
+    private async runTurn(options: AgentTurnOptions, signal: AbortSignal, compactOnly = false): Promise<string> {
         const cwd = resolve(options.cwd ?? process.env.PUPPYGPT_WORKDIR ?? process.cwd())
         const policy = validatePolicy(options.executionPolicy ?? hostPolicy)
-        const execTool = { ...EXEC_TOOL, description: `Execute a shell command on a runtime-approved target. Allowed targets: ${targetDescription(policy)}. Default: ${policy.defaultTarget}. Host commands can background on steering; Docker commands finish or time out. Docker paths are container paths; reported output files are on the host.`, parameters: {
-            ...asObject(EXEC_TOOL.parameters), properties: { ...asObject(asObject(EXEC_TOOL.parameters)?.properties), target: { type: "string", enum: policy.targets.map(t => t.id), description: "Runtime-approved execution target" } }, required: ["command", "timeout_ms", "target"],
-        } }
-        const tools = [execTool, viewImageTool(cwd), WEB_SEARCH_TOOL, IMAGEGEN_TOOL]
+        const { instructions, tools } = await describeAgentContext(options)
         const fetchImpl = options.fetchImpl ?? fetch
         const endpoint = options.endpoint ?? process.env.PUPPYGPT_CODEX_ENDPOINT ?? DEFAULT_ENDPOINT
         const execute = options.execute ?? createExecutor(policy)
@@ -365,13 +401,6 @@ export class AgentSession {
             fetchImpl,
         })
         const model = options.model ?? DEFAULT_MODEL
-        const workspaceInstructions = options.loadWorkspaceInstructions
-            ? await options.loadWorkspaceInstructions()
-            : await readFile(join(cwd, "AGENTS.md"), "utf8").catch(error => {
-                if (error.code === "ENOENT") return ""
-                throw error
-            })
-        const instructions = [coreInstructions(cwd), options.instructions, workspaceInstructions].filter(Boolean).join("\n\n")
         const configuredContextWindow = options.contextWindow
             ?? Number.parseInt(process.env.PUPPYGPT_MODEL_CONTEXT_WINDOW ?? "", 10)
 
@@ -416,15 +445,18 @@ export class AgentSession {
             }
         }
 
-        const appendSteeringInput = (): boolean => {
+        const appendSteeringInput = async (): Promise<boolean> => {
             if (!this.steeringInput.length) {
                 return false
             }
-            this.input.push(...this.steeringInput.splice(0))
+            for (const item of this.steeringInput.splice(0)) {
+                this.input.push(item)
+                await options.onInteraction?.({ type: "checkpoint", step: 0, kind: "user", snapshot: this.contextSnapshot() })
+            }
             return true
         }
 
-        const compact = async (reason: "auto" | "context_overflow"): Promise<void> => {
+        const compact = async (reason: "auto" | "context_overflow" | "manual"): Promise<void> => {
             const compactionId = randomUUID()
             const contextTokens = this.activeContextTokens
             await options.onInteraction?.({ type: "compaction_start", compactionId, reason, contextTokens })
@@ -481,6 +513,7 @@ export class AgentSession {
             } catch (error) {
                 await options.onInteraction?.({
                     type: "compaction_error",
+                    cancelled: signal.aborted,
                     compactionId,
                     reason,
                     contextTokens,
@@ -489,6 +522,8 @@ export class AgentSession {
                 throw error
             }
         }
+
+        if (compactOnly) { await compact("manual"); return "" }
 
         const shouldCompact = async (): Promise<boolean> => {
             if (this.activeContextTokens === undefined) {
@@ -550,7 +585,7 @@ export class AgentSession {
             if (await shouldCompact()) {
                 await compact("auto")
             }
-            appendSteeringInput()
+            await appendSteeringInput()
             const body: JsonObject = {
                 model,
                 instructions,
@@ -600,7 +635,8 @@ export class AgentSession {
             this.activeContextTokens = asNumber(response.usage?.total_tokens) ?? asNumber(response.usage?.input_tokens)
             const calls = response.output.filter(item => item.type === "function_call")
             if (!calls.length) {
-                if (appendSteeringInput()) {
+                await options.onInteraction?.({ type: "checkpoint", step: step + 1, kind: "assistant", snapshot: this.contextSnapshot() })
+                if (await appendSteeringInput()) {
                     continue
                 }
                 const text = extractOutputText(response.output)
@@ -718,6 +754,7 @@ export class AgentSession {
                 }
                 this.input.push({ type: "function_call_output", call_id: callId, output })
             }
+            await options.onInteraction?.({ type: "checkpoint", step: step + 1, kind: "assistant", snapshot: this.contextSnapshot() })
         }
         throw new Error(`Agent exceeded its ${maxSteps} step limit`)
     }

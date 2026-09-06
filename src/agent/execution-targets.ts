@@ -1,13 +1,22 @@
 import { realpath } from "node:fs/promises"
-import { isAbsolute, relative, join } from "node:path"
+import { isAbsolute, relative, join, resolve } from "node:path"
 import { runProcess, type ExecInput, type ExecResult } from "./exec"
 
 export type ExecutionTarget = { id: string, kind: "host", maxTimeoutMs?: number } | {
-    id: string, kind: "docker", image: string, workspaceRoot: string, socketPath?: string,
+    id: string, kind: "docker", image: string, workspaceRoot: string, socketPath?: string, rootless?: boolean,
     network?: "none" | "bridge", readOnly?: boolean, memoryMb?: number, cpus?: number, pidsLimit?: number, maxTimeoutMs?: number,
 }
 export type ExecutionPolicy = { defaultTarget: string, targets: ExecutionTarget[] }
 export const hostPolicy: ExecutionPolicy = { defaultTarget: "host", targets: [{ id: "host", kind: "host" }] }
+export const defaultDockerPolicy = (workspaceRoot: string): ExecutionPolicy => ({
+    defaultTarget: "docker",
+    targets: [{ id: "docker", kind: "docker", image: "puppygpt-exec:local", workspaceRoot, network: "bridge", memoryMb: 2048, cpus: 2, pidsLimit: 256 }, ...hostPolicy.targets],
+})
+export async function loadExecutionPolicy(workspaceRoot: string, dataDirectory: string, explicitPath?: string): Promise<ExecutionPolicy> {
+    const savedPath = resolve(dataDirectory, "execution.json")
+    const path = explicitPath ?? (await Bun.file(savedPath).exists() ? savedPath : undefined)
+    return path ? validatePolicy(await Bun.file(resolve(path)).json()) : defaultDockerPolicy(workspaceRoot)
+}
 export function validatePolicy(value: unknown): ExecutionPolicy {
     const p = value as ExecutionPolicy
     if (!p || !Array.isArray(p.targets) || !p.targets.length || p.targets.length > 16) throw new Error("Execution policy must define 1–16 targets")
@@ -21,6 +30,7 @@ export function validatePolicy(value: unknown): ExecutionPolicy {
             if (typeof target.image !== "string" || !target.image || target.image.startsWith("-") || /\s/.test(target.image)) throw new Error("Docker target needs an image")
             if (typeof target.workspaceRoot !== "string" || !isAbsolute(target.workspaceRoot) || target.workspaceRoot.includes(",")) throw new Error("Docker workspaceRoot must be an absolute path without commas")
             if (target.socketPath !== undefined && (!isAbsolute(target.socketPath) || target.socketPath.includes("\0"))) throw new Error("Docker requires a local Unix socket path")
+            if (target.rootless !== undefined && typeof target.rootless !== "boolean") throw new Error("Invalid Docker rootless mode")
             if (target.network !== undefined && !["none", "bridge"].includes(target.network)) throw new Error("Invalid Docker network policy")
             if (target.readOnly !== undefined && typeof target.readOnly !== "boolean") throw new Error("Invalid Docker workspace access")
             for (const key of ["memoryMb", "cpus", "pidsLimit"] as const) if (target[key] !== undefined && (!Number.isFinite(target[key]) || target[key]! <= 0)) throw new Error(`Invalid Docker ${key}`)
@@ -53,6 +63,13 @@ export const dockerControl: DockerControl = async (socket, args, signal) => {
         return out.trim()
     } finally { clearTimeout(timer); signal?.removeEventListener("abort", stop) }
 }
+// Container UID 0 maps to the daemon owner only with a rootless daemon.
+export async function dockerUser(target: Extract<ExecutionTarget, { kind: "docker" }>, control: DockerControl): Promise<string> {
+    if (!target.rootless) return `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`
+    const options: unknown = JSON.parse(await control(target.socketPath ?? "/var/run/docker.sock", ["info", "--format", "{{json .SecurityOptions}}"]))
+    if (!Array.isArray(options) || !options.includes("name=rootless")) throw new Error("Rootless Docker target requires a verified rootless daemon")
+    return "0:0"
+}
 function dockerEnv(): Record<string, string | undefined> {
     return { PATH: process.env.PATH, HOME: process.env.HOME, LANG: process.env.LANG }
 }
@@ -73,7 +90,7 @@ export function createExecutor(policyInput: ExecutionPolicy, dependencies: { con
         if (subpath.split("/").includes(".puppygpt")) throw new Error("Runtime data cannot be a Docker working directory")
         const socket = target.socketPath ?? "/var/run/docker.sock"
         const name = `puppygpt-exec-${crypto.randomUUID()}`
-        const args = ["create", "--name", name, "--pull=never", "--network", target.network ?? "none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit", String(target.pidsLimit ?? 128), "--memory", `${target.memoryMb ?? 512}m`, "--cpus", String(target.cpus ?? 1), "--user", `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`, "--mount", `type=bind,src=${root},dst=/workspace${target.readOnly ? ",readonly" : ""}`, "--tmpfs", "/tmp:rw,nosuid,nodev,size=128m", "--tmpfs", "/workspace/.puppygpt:rw,noexec,nosuid,nodev,size=1m", "--workdir", `/workspace${subpath ? `/${subpath}` : ""}`, "--env", "HOME=/tmp", "--entrypoint", "/bin/sh", target.image, "-c", input.command]
+        const args = ["create", "--name", name, "--pull=never", "--network", target.network ?? "none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit", String(target.pidsLimit ?? 128), "--memory", `${target.memoryMb ?? 512}m`, "--cpus", String(target.cpus ?? 1), "--user", await dockerUser(target, control), "--mount", `type=bind,src=${root},dst=/workspace${target.readOnly ? ",readonly" : ""}`, "--tmpfs", "/tmp:rw,nosuid,nodev,size=128m", "--tmpfs", "/workspace/.puppygpt:rw,noexec,nosuid,nodev,size=1m", "--workdir", `/workspace${subpath ? `/${subpath}` : ""}`, "--env", "HOME=/tmp", "--entrypoint", "/bin/sh", target.image, "-c", input.command]
         let created = false
         let cleanup: Promise<void> | undefined
         const remove = () => cleanup ??= control(socket, ["rm", "--force", "--volumes", name]).then(() => {})

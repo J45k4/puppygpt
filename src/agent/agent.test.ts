@@ -127,14 +127,13 @@ test("agent executes a tool call and sends its output back to Codex", async () =
         expect(String(toolOutput?.output)).toContain("Full output: /work/.puppygpt/exec-results/call-1/output.log")
         expect(String(toolOutput?.output)).not.toStartWith("{")
         expect(interactions.map(interaction => interaction.type)).toEqual([
-            "request",
-            "response",
-            "tool_start",
-            "tool_result",
-            "request",
-            "response",
-            "final",
+            "checkpoint", "request", "response", "tool_start", "tool_result",
+            "checkpoint", "request", "response", "checkpoint", "final",
         ])
+        const checkpoints = interactions.filter(interaction => interaction.type === "checkpoint")
+        expect(checkpoints[0]?.snapshot.items.at(-1)?.role).toBe("user")
+        expect(checkpoints[1]?.snapshot.items.some(item => item.type === "function_call_output")).toBeTrue()
+        expect(checkpoints[2]?.snapshot.items.at(-1)?.role).toBe("assistant")
     } finally {
         await rm(directory, { recursive: true, force: true })
     }

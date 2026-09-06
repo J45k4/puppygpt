@@ -1,0 +1,4 @@
+# The execution image downloads its dependencies; it needs no workspace content.
+**
+!Dockerfile.execution
+!.dockerignore

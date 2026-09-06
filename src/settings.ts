@@ -15,7 +15,7 @@ export type Settings = {
 }
 
 export const defaultSettings = (cwd: string): Settings => ({
-    cwd, model: "gpt-5.6-sol", reasoningEffort: "medium", instructions: "", enterToSend: true, accountId: null,
+    cwd, model: "gpt-6-astra", reasoningEffort: "medium", instructions: "", enterToSend: true, accountId: null,
 })
 
 export function validateSettings(value: unknown): Settings {

@@ -1,0 +1,6 @@
+FROM oven/bun:1.3.11 AS bun
+FROM debian:trixie
+RUN apt-get update && apt-get install -y --no-install-recommends bash ca-certificates git python3 util-linux && rm -rf /var/lib/apt/lists/*
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
+WORKDIR /workspace
+CMD ["sleep", "infinity"]

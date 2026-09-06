@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState, type FormEvent } from "react"
+import { useEffect, useState, type FormEvent } from "react"
 import { MODELS, type Settings } from "./settings"
+import { IntegrationsPanel } from "./IntegrationsPanel"
 import { AccountsPanel } from "./AccountsPanel"
 import type { SettingsSection } from "./navigation"
 import { Icon } from "./Icon"
 
 const sections = [
     { id: "accounts", label: "Accounts", icon: "chat" as const, description: "Connect accounts and choose credentials for new chats." },
+    { id: "integrations", label: "Integrations", icon: "plug" as const, description: "Connections to your tools and services." },
     { id: "preferences", label: "Preferences", icon: "settings" as const, description: "Choose your default workspace, model, and chat behavior." },
     { id: "agent", label: "Agent", icon: "spark" as const, description: "Set how PuppyGPT reasons and follows your instructions." },
 ] as const
@@ -22,9 +24,7 @@ export function SettingsPage({ section, onSectionChange, onSave, onClose }: {
     const [saving, setSaving] = useState(false)
     const [status, setStatus] = useState("")
     const [reload, setReload] = useState(0)
-    const heading = useRef<HTMLHeadingElement>(null)
     const dirty = JSON.stringify(draft) !== JSON.stringify(saved)
-    useEffect(() => { heading.current?.focus() }, [])
     useEffect(() => {
         const controller = new AbortController()
         setError("")
@@ -55,7 +55,6 @@ export function SettingsPage({ section, onSectionChange, onSave, onClose }: {
         finally { setSaving(false) }
     }
     return <div className="settings-scroll"><div className="settings-page">
-        <div className="settings-heading"><p className="eyebrow">MAKE YOURSELF AT HOME</p><h1 ref={heading} tabIndex={-1}>Settings</h1><p>A few preferences to make PuppyGPT feel like yours.</p></div>
         <div className="settings-layout"><nav className="settings-menu" role="tablist" aria-label="Settings sections" aria-orientation="vertical">{sections.map((item, index) => <button key={item.id} type="button" role="tab" id={`settings-tab-${item.id}`} aria-controls={`settings-panel-${item.id}`} aria-selected={section === item.id} tabIndex={section === item.id ? 0 : -1} onClick={() => changeSection(item.id)} onKeyDown={event => {
             let target = index
             if (["ArrowDown", "ArrowRight"].includes(event.key)) target = (index + 1) % sections.length
@@ -69,6 +68,9 @@ export function SettingsPage({ section, onSectionChange, onSave, onClose }: {
         {!draft ? !error && <p role="status">Loading settings…</p> : <form onSubmit={save} noValidate>
             <div role="tabpanel" id="settings-panel-accounts" aria-labelledby="settings-tab-accounts" hidden={section !== "accounts"}>
             <AccountsPanel selectedId={draft.accountId ?? null} onSelect={accountId => update({ accountId })} />
+            </div>
+            <div role="tabpanel" id="settings-panel-integrations" aria-labelledby="settings-tab-integrations" hidden={section !== "integrations"}>
+                <IntegrationsPanel />
             </div>
             <div role="tabpanel" id="settings-panel-preferences" aria-labelledby="settings-tab-preferences" hidden={section !== "preferences"}>
             <fieldset disabled={saving} className="settings-card"><legend>New chat defaults</legend><p className="settings-help">Existing chats keep their current workspace and model.</p>
@@ -85,7 +87,7 @@ export function SettingsPage({ section, onSectionChange, onSave, onClose }: {
                 <p id="instructions-help" className="settings-help">Added alongside the workspace’s AGENTS.md instructions.</p>
             </fieldset>
             </div>
-            <div className="settings-actions"><span role="status">{status || (dirty ? "Unsaved changes" : "")}</span><button type="button" disabled={saving} className="settings-secondary" onClick={() => { if (dirty) { setDraft(saved); setError(""); setStatus("") } else onClose() }}>{dirty ? "Discard changes" : "Back to chat"}</button><button className="settings-save" type="submit" disabled={saving || !dirty}>{saving ? "Saving…" : "Save changes"}</button></div>
+            <div className="settings-actions"><span role="status">{status || (dirty ? "Unsaved changes" : "")}</span><button type="button" disabled={saving} className="settings-secondary" onClick={() => { if (dirty) { setDraft(saved); setError(""); setStatus("") } else onClose() }}>{dirty ? "Discard changes" : "Back to chat"}</button>{(section !== "integrations" || dirty) && <button className="settings-save" type="submit" disabled={saving || !dirty}>{saving ? "Saving…" : "Save changes"}</button>}</div>
         </form>}
     </div></div></div></div>
 }

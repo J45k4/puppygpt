@@ -71,3 +71,16 @@ test("timeout removes Docker container before returning; pre-cancelled calls do 
     await expect(execute({ command: "true", cwd: root, signal: c.signal })).rejects.toThrow()
     expect(operations).toEqual(["create", "rm"])
 })
+
+test("rootless target maps workspace ownership only after verifying the daemon", async () => {
+    const { dockerUser } = await import("./execution-targets")
+    const target = { id: "rootless", kind: "docker" as const, image: "test", workspaceRoot: "/tmp", rootless: true, socketPath: "/run/user/1000/docker.sock" }
+    expect(await dockerUser(target, async (socket, args) => {
+        expect(socket).toBe(target.socketPath)
+        expect(args).toEqual(["info", "--format", "{{json .SecurityOptions}}"])
+        return '["name=seccomp,profile=builtin","name=rootless"]'
+    })).toBe("0:0")
+    await expect(dockerUser(target, async () => '["name=seccomp,profile=builtin"]')).rejects.toThrow("verified rootless daemon")
+    await expect(dockerUser(target, async () => { throw new Error("permission denied") })).rejects.toThrow("permission denied")
+    expect(() => validatePolicy({ defaultTarget: target.id, targets: [{ ...target, rootless: "true" }] })).toThrow("rootless")
+})

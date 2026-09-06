@@ -28,6 +28,8 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # credentials and local databases, including custom data directories
 auth.key
 auth.key.*.tmp
+integrations.key
+integrations.key.*.tmp
 auth.json
 auth.json.*.tmp
 *.sqlite

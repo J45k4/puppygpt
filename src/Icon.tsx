@@ -1,7 +1,11 @@
 import puppyLogo from "./assets/puppygpt-wizard-logo.png"
 
-export function Icon({ name, size = 20 }: { name: "plus" | "arrow" | "chat" | "folder" | "chevron" | "terminal" | "stop" | "panel" | "check" | "code" | "spark" | "search" | "settings", size?: number }) {
+export function Icon({ name, size = 20 }: { name: "plus" | "arrow" | "chat" | "folder" | "chevron" | "terminal" | "stop" | "panel" | "check" | "code" | "spark" | "search" | "settings" | "bell" | "copy" | "download" | "plug", size?: number }) {
     const paths = {
+        plug: "M8 3v5m8-5v5M6 8h12v4a6 6 0 0 1-12 0ZM12 18v4",
+        download: "M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5",
+        copy: "M9 9h11v12H9ZM5 15H3V3h11v2",
+        bell: "M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4",
         settings: "M4 7h16M4 17h16M9 4v6m6 4v6",
         plus: "M12 5v14M5 12h14",
         arrow: "M12 19V5m-6 6 6-6 6 6",
