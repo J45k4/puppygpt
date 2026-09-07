@@ -1,6 +1,6 @@
 import { EnvironmentWebhooks } from "./EnvironmentWebhooks"
 import { useEffect, useState } from "react"
-import type { Environment } from "./environments"
+import type { Environment } from "../environments"
 import { EnvironmentShell } from "./EnvironmentShell"
 
 export function EnvironmentsPage({ targets, onChange, environmentId, navigate }: { targets: { id: string, kind: string }[], onChange: () => void, environmentId: string | null, navigate: (path: string) => void }) {

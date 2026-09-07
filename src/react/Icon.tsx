@@ -1,4 +1,4 @@
-import puppyLogo from "./assets/puppygpt-wizard-logo.png"
+import puppyLogo from "../assets/puppygpt-wizard-logo.png"
 
 export function Icon({ name, size = 20 }: { name: "plus" | "arrow" | "chat" | "folder" | "chevron" | "terminal" | "stop" | "panel" | "check" | "code" | "spark" | "search" | "settings" | "bell" | "copy" | "download" | "plug", size?: number }) {
     const paths = {

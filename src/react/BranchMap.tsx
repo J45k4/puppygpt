@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react"
-import type { ChatSummary } from "./chat-types"
-import { layoutBranches } from "./branch-map"
+import type { ChatSummary } from "../chat-types"
+import { layoutBranches } from "../branch-map"
 
 export function BranchMap({ chats, selectedId, onOpen }: { chats: ChatSummary[], selectedId: string | null, onOpen: (id: string) => void }) {
     const [scope, setScope] = useState("all")

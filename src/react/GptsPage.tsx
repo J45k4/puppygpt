@@ -1,8 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react"
 import { Icon } from "./Icon"
-import { MODELS } from "./settings"
-import type { Gpt, GptInput } from "./gpts"
-import type { Chat } from "./chat-types"
+import { MODELS } from "../settings"
+import type { Gpt, GptInput } from "../gpts"
+import type { Chat } from "../chat-types"
 const blank = (): GptInput => ({ name: "", description: "", instructions: "", model: "gpt-6-astra", reasoningEffort: "medium" })
 async function request<T>(path: string, body?: unknown): Promise<T> {
     const response = await fetch(path, body === undefined ? undefined : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })

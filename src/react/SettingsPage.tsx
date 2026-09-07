@@ -1,8 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react"
-import { MODELS, type Settings } from "./settings"
+import { MODELS, type Settings } from "../settings"
 import { IntegrationsPanel } from "./IntegrationsPanel"
 import { AccountsPanel } from "./AccountsPanel"
-import type { SettingsSection } from "./navigation"
+import type { SettingsSection } from "../navigation"
 import { Icon } from "./Icon"
 
 const sections = [

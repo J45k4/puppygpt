@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import type { Webhook } from "./webhooks"
+import type { Webhook } from "../webhooks"
 
 export function EnvironmentWebhooks({ environmentId }: { environmentId: string }) {
     const [hooks, setHooks] = useState<Webhook[]>([])

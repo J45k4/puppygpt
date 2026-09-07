@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import type { ChatSummary } from "./chat-types"
+import type { ChatSummary } from "../chat-types"
 import { Icon } from "./Icon"
 
 export function Notifications({ chats, disabled, onSelect }: { chats: ChatSummary[], disabled: boolean, onSelect: (id: string) => void }) {

@@ -1,4 +1,4 @@
-import type { ChatMessage } from "./chat-types"
+import type { ChatMessage } from "../chat-types"
 
 export function isCompactionMessage(message: ChatMessage) {
     return message.role === "activity" && ["Compacting conversation", "Conversation compacted", "Compaction failed", "Compaction interrupted"].includes(message.text)

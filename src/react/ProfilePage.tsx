@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
-import type { AppConfig } from "./chat-types"
-import type { ConnectedAccount, LocalAccount } from "./account-types"
-import { MODELS } from "./settings"
+import type { AppConfig } from "../chat-types"
+import type { ConnectedAccount, LocalAccount } from "../account-types"
+import { MODELS } from "../settings"
 
 export function ProfilePage({ config, navigate }: { config: AppConfig | null, navigate: (path: string) => void }) {
     const [identity, setIdentity] = useState<{ name: string, email?: string, plan?: string } | null>(null)

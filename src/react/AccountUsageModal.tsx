@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
-import type { AccountUsage, UsageWindow } from "./account-usage"
+import type { AccountUsage, UsageWindow } from "../account-usage"
 
 const count = (n: number | null | undefined) => n == null ? "Not available" : n.toLocaleString()
 const date = (s: string | null | undefined) => s && Number.isFinite(Date.parse(s)) ? new Date(s).toLocaleString() : "Not available"

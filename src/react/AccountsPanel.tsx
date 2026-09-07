@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { AccountUsageModal } from "./AccountUsageModal"
 import { createPortal } from "react-dom"
-import type { AccountLogin, ConnectedAccount, LocalAccount } from "./account-types"
+import type { AccountLogin, ConnectedAccount, LocalAccount } from "../account-types"
 
 async function api<T>(path: string, body?: unknown): Promise<T> {
     const response = await fetch(path, body === undefined ? undefined : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })

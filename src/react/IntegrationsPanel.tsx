@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import type { Integration } from "./integrations"
+import type { Integration } from "../integrations"
 async function request<T>(path: string, body?: unknown): Promise<T> {
     const response = await fetch(path, body === undefined ? undefined : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
     const result = await response.json()

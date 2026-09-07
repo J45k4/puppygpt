@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import type { ChatStore } from "./chats"
+import type { ChatStore } from "../chats"
 import { CopyMessageButton } from "./CopyMessageButton"
 type Context = Awaited<ReturnType<ChatStore["context"]>>
 export function ChatContextPage({ chatId, onBack }: { chatId: string, onBack: () => void }) {

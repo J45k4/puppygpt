@@ -1,11 +1,11 @@
-import { latestChat } from "./chat-state"
+import { latestChat } from "../chat-state"
 import { Fragment, useEffect, useState, type FormEvent } from "react"
 import { CompactionMarker, isCompactionMessage } from "./CompactionMarker"
 import { ForkMarker } from "./ForkMarker"
 import { CopyMessageButton } from "./CopyMessageButton"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import type { AppConfig, Chat, ChatMessage, ChatSummary } from "./chat-types"
+import type { AppConfig, Chat, ChatMessage, ChatSummary } from "../chat-types"
 
 async function request<T>(path: string, body?: unknown): Promise<T> {
     const response = await fetch(path, body === undefined ? undefined : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
-import type { Chat } from "./chat-types"
+import type { Chat } from "../chat-types"
 import { Icon } from "./Icon"
 
 export function DownloadChatButton({ chat }: { chat: Chat }) {
