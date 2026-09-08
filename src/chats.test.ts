@@ -777,3 +777,60 @@ test("context API exposes retained model input and effective instructions withou
     expect(saved.snapshot.items).toEqual(live.snapshot!.items)
     expect((await api(new Request("http://localhost/api/chats/missing/context"))).status).toBe(404)
 })
+
+test("voice API inherits local origin protection and validates media before upstream calls", async () => {
+    const { cwd, authFile } = await fixture()
+    const store = new ChatStore(new Database(":memory:"), cwd, { authFile })
+    stores.push(store)
+    const chat = await store.create()
+    const api = createChatApi(store)
+    const path = `http://localhost/api/chats/${chat.id}/voice`
+    const request = (headers: Record<string, string>, body: object = {}) => new Request(path, { method: "POST", headers, body: JSON.stringify(body) })
+    expect((await api(request({ Origin: "https://evil.example", "Content-Type": "application/json" }))).status).toBe(403)
+    expect((await api(request({ "Sec-Fetch-Site": "cross-site", "Content-Type": "application/json" }))).status).toBe(403)
+    expect((await api(request({ "Content-Type": "text/plain" }))).status).toBe(415)
+    const invalid = await api(request({ "Content-Type": "application/json" }, { id: crypto.randomUUID(), sdp: "bad", voice: "cove" }))
+    expect(invalid.status).toBe(400)
+    expect(await invalid.json()).toEqual({ error: "Expected an audio-only WebRTC offer" })
+    const missing = await api(new Request(`http://localhost/api/chats/${chat.id}/voice/${crypto.randomUUID()}`))
+    expect(missing.status).toBe(400)
+    expect(JSON.stringify(await missing.json())).not.toContain("token")
+})
+
+test("voice transcripts and delegated agent work persist together across restart", async () => {
+    const { cwd, authFile } = await fixture()
+    const auth = await Bun.file(authFile).json()
+    auth.tokens.account_id = "test-voice-account"
+    await Bun.write(authFile, JSON.stringify(auth))
+    class Socket extends EventTarget {
+        readyState: 0 | 1 | 2 | 3 = 0
+        sent: any[] = []
+        send(value: unknown) { this.sent.push(JSON.parse(String(value))) }
+        close() { this.readyState = 3; this.dispatchEvent(new Event("close")) }
+        emit(value: object) { this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(value) })) }
+    }
+    const socket = new Socket()
+    const database = join(cwd, "voice.sqlite")
+    const options = { authFile, fetchImpl: async () => sse([answer("Delegated voice result")]) }
+    const store = new ChatStore(new Database(database), cwd, options, join(cwd, "accounts"), undefined, {
+        fetchImpl: async () => new Response("v=0\r\nm=audio 9 RTP/AVP 111\r\n", { headers: { "openai-session-id": "rtc_test" } }),
+        socket: (_url, headers) => { expect(headers["chatgpt-account-id"]).toBe("test-voice-account"); setTimeout(() => { socket.readyState = 1; socket.dispatchEvent(new Event("open")) }, 0); return socket },
+    })
+    stores.push(store)
+    const chat = await store.create()
+    const api = createChatApi(store)
+    const result = await api(new Request(`http://localhost/api/chats/${chat.id}/voice`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: crypto.randomUUID(), sdp: "v=0\r\nm=audio 9 RTP/AVP 111\r\n", voice: "cove" }) }))
+    expect(result.status).toBe(200)
+    socket.emit({ type: "turn.done", turn: { role: "user", transcript: "Check this workspace" } })
+    socket.emit({ type: "delegation.created", item: { id: "delegate", type: "delegation", target: "client", content: [{ type: "input_text", text: "Reply with the test result" }] } })
+    await store.settled()
+    await Bun.sleep(5)
+    expect(socket.sent.some(event => event.type === "delegation.context.append" && event.content[0].text === "Delegated voice result")).toBe(true)
+    expect(store.get(chat.id)!.messages.some(m => m.detail === "voice:user" && m.text.includes("Check this workspace"))).toBe(true)
+    await store.close(); stores.splice(stores.indexOf(store), 1)
+    const restored = new ChatStore(new Database(database), cwd, options)
+    stores.push(restored)
+    expect(restored.get(chat.id)!.messages.some(m => m.detail === "voice:user")).toBe(true)
+    expect(restored.get(chat.id)!.messages.some(m => m.role === "assistant" && m.text === "Delegated voice result")).toBe(true)
+    expect(restored.get(chat.id)!.environmentId).toBe(chat.environmentId)
+})

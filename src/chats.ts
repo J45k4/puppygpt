@@ -15,11 +15,13 @@ import { hostPolicy, loadExecutionPolicy, selectTarget, type DockerControl } fro
 import { EnvironmentStore, ENV_REAPER_INTERVAL_MS, type Environment } from "./environments"
 import { GptStore } from "./gpts"
 import { AccountStore } from "./accounts"
+import { VoiceStore } from "./voice"
 
 type Snapshot = ReturnType<AgentSession["contextSnapshot"]>
 type Row = { data: string, context: string | null }
 
 export class ChatStore {
+    readonly voice: VoiceStore
     readonly integrations: IntegrationStore
     readonly routing: RoutingStore
     readonly schedules: ScheduleStore
@@ -39,7 +41,7 @@ export class ChatStore {
     private checkpointUsers = new Map<string, string[]>()
     private preparing = new Map<string, AbortController>()
 
-    constructor(private db: Database, readonly cwd: string, private agentOptions: AgentTurnOptions = {}, accountDirectory = resolve(cwd, ".puppygpt", "accounts"), environmentControl?: DockerControl) {
+    constructor(private db: Database, readonly cwd: string, private agentOptions: AgentTurnOptions = {}, accountDirectory = resolve(cwd, ".puppygpt", "accounts"), environmentControl?: DockerControl, voiceOptions: ConstructorParameters<typeof VoiceStore>[1] = {}) {
         this.integrations = new IntegrationStore(db, resolve(accountDirectory, "..", "integrations.key"))
         this.routing = new RoutingStore(db)
         this.schedules = new ScheduleStore(db)
@@ -48,6 +50,36 @@ export class ChatStore {
         this.webhooks = new WebhookStore(db, this.environments)
         this.environments.setUsageGuard(id => this.list().some(chat => chat.status === "running" && (chat.environmentId ?? `default-${chat.executionTarget ?? (agentOptions.executionPolicy ?? hostPolicy).defaultTarget}`) === id))
         this.accounts = new AccountStore(db, accountDirectory, agentOptions)
+        this.voice = new VoiceStore({
+            auth: id => {
+                const chat = this.get(id)
+                if (!chat) throw new Error("Chat not found")
+                return { ...this.agentOptions, authStorage: chat.accountId ? this.accounts.credentials(chat.accountId) : undefined }
+            },
+            history: id => (this.get(id)?.messages ?? []).flatMap(m => {
+                if (m.role === "user" || m.role === "assistant") return [{ role: m.role, text: m.text }]
+                if (m.detail === "voice:user" || m.detail === "voice:assistant") return [{ role: m.detail === "voice:user" ? "user" as const : "assistant" as const, text: m.text.replace(/^(You|PuppyGPT) \(voice\): /, "") }]
+                return []
+            }),
+            consult: async (id, prompt) => {
+                const chat = this.get(id)
+                if (!chat) throw new Error("Chat not found")
+                if (chat.status === "running") return "The chat agent is already running. Use the chat controls to guide or stop it, or wait for it to finish."
+                const previous = new Set(chat.messages.map(m => m.id))
+                this.send(id, prompt)
+                const result = await this.turnTasks.get(id)
+                if (!result?.ok) throw new Error("Voice agent request failed")
+                return this.get(id)?.messages.filter(m => m.role === "assistant" && !previous.has(m.id)).map(m => m.text).join("\n").slice(-1800) || "The agent finished. See the chat for details."
+            },
+            transcript: (id, role, text) => {
+                const chat = this.get(id)
+                if (!chat) return
+                chat.messages.push({ id: crypto.randomUUID(), role: "activity", text: `${role === "user" ? "You" : "PuppyGPT"} (voice): ${text}`, detail: `voice:${role}` })
+                chat.updatedAt = new Date().toISOString()
+                this.save(chat)
+                this.publish(chat)
+            },
+        }, voiceOptions)
         db.run("PRAGMA journal_mode = WAL")
         db.run("CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id = 1), data TEXT NOT NULL)")
         db.run("CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, data TEXT NOT NULL, context TEXT)")
@@ -665,6 +697,7 @@ export class ChatStore {
     }
 
     async removeAccount(id: string) {
+        if (this.list().some(chat => chat.accountId === id && this.voice.hasChat(chat.id))) throw new Error("End this account’s voice calls before removing it")
         if (this.list().some(chat => chat.accountId === id && chat.status === "running")) throw new Error("Stop this account’s running chats before removing it")
         await this.accounts.remove(id)
         const settings = this.settings()
@@ -677,6 +710,7 @@ export class ChatStore {
     async settled() { await Promise.all(this.tasks) }
 
     async close() {
+        this.voice.close()
         this.schedules.stop()
         clearInterval(this.cleanupTimer)
         await this.cleanupTask

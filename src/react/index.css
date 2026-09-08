@@ -1413,3 +1413,24 @@ h1 {
 .webhook-form { display:flex; flex-wrap:wrap; align-items:flex-end; gap:12px; margin-top:16px; }
 .webhook-form label { display:flex; flex-direction:column; gap:6px; flex:1; min-width:120px; }
 .webhook-form input { width:100%; }
+
+.voice-panel { margin: 0 0 10px; padding: 10px 14px; border: 1px solid var(--border, #ddd); border-radius: 14px; }
+.voice-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; font-size: 13px; }
+.voice-controls label { display: flex; align-items: center; gap: 8px; }
+.voice-controls select, .voice-controls button { font: inherit; color: inherit; background: transparent; border: 1px solid var(--border, #ddd); border-radius: 8px; padding: 6px 10px; }
+.voice-controls button { cursor: pointer; }
+.voice-controls button[aria-pressed="true"] { background: #b4494920; }
+.voice-panel > p { margin: 6px 0 0; font-size: 11px; opacity: .65; }
+.voice-panel .error-banner { margin-top: 8px; }
+.voice-status { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; }
+.voice-status-dot { width: 8px; height: 8px; border-radius: 50%; background: #858585; }
+.voice-panel[data-state="live"] { border-color: #47a774; background: #47a7740c; }
+.voice-panel[data-state="live"] .voice-status-dot { background: #20854d; box-shadow: 0 0 0 3px #20854d20; }
+.voice-panel[data-state="muted"], .voice-panel[data-state="connecting"] { border-color: #ba8a32; }
+.voice-panel[data-state="muted"] .voice-status-dot, .voice-panel[data-state="connecting"] .voice-status-dot { background: #ba8a32; }
+.voice-controls .voice-end-button { margin-left: auto; color: #b12d34; border-color: #b12d3455; }
+.voice-icon-button, .voice-controls .voice-icon-button { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 32px; height: 32px; padding: 0; border: 1px solid #dedede; border-radius: 50%; background: #f7f7f8; color: #171717; cursor: pointer; }
+.voice-icon-button svg { stroke-width: 2; }
+.voice-icon-button:hover:not(:disabled) { background: #e9e9eb; }
+.voice-icon-button:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+.voice-icon-button:disabled { opacity: .45; cursor: not-allowed; }

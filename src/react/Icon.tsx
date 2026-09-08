@@ -1,7 +1,8 @@
 import puppyLogo from "../assets/puppygpt-wizard-logo.png"
 
-export function Icon({ name, size = 20 }: { name: "plus" | "arrow" | "chat" | "folder" | "chevron" | "terminal" | "stop" | "panel" | "check" | "code" | "spark" | "search" | "settings" | "bell" | "copy" | "download" | "plug" | "clock", size?: number }) {
+export function Icon({ name, size = 20 }: { name: "plus" | "arrow" | "chat" | "folder" | "chevron" | "terminal" | "stop" | "panel" | "check" | "code" | "spark" | "search" | "settings" | "bell" | "copy" | "download" | "plug" | "clock" | "voice", size?: number }) {
     const paths = {
+        voice: "M4 10v4M8 6v12M12 3v18M16 8v8M20 10v4",
         clock: "M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z",
         plug: "M8 3v5m8-5v5M6 8h12v4a6 6 0 0 1-12 0ZM12 18v4",
         download: "M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5",

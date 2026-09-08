@@ -10,6 +10,9 @@ export const createChatApi = (store: ChatStore) => async (request: Request): Pro
     }
     if (!["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) return new Response("Invalid host", { status: 403 })
     try {
+        const voiceMatch = /^\/api\/chats\/([^/]+)\/voice(?:\/([a-f0-9-]{36})(?:\/(stop))?)?$/.exec(url.pathname)
+        if (voiceMatch && !store.get(voiceMatch[1]!)) return Response.json({ error: "Chat not found" }, { status: 404 })
+        if (request.method === "GET" && voiceMatch?.[2] && !voiceMatch[3]) return Response.json(store.voice.get(voiceMatch[1]!, voiceMatch[2]), { headers: { "Cache-Control": "no-store" } })
         if (request.method === "GET" && url.pathname === "/api/webhooks") return Response.json(store.webhooks.list(), { headers: { "Cache-Control": "no-store" } })
         if (request.method === "GET" && url.pathname === "/api/environments") return Response.json(await store.environments.reconcileAll())
         const accountReply = (body: unknown) => Response.json(body, { headers: { "Cache-Control": "no-store" } })
@@ -89,6 +92,10 @@ export const createChatApi = (store: ChatStore) => async (request: Request): Pro
             if (text.length > 70_000) return Response.json({ error: "Message too large" }, { status: 413 })
             const body = JSON.parse(text)
             if (!body || Array.isArray(body) || typeof body !== "object") throw new Error("Expected a JSON object")
+            if (voiceMatch) {
+                if (!voiceMatch[2]) return Response.json(await store.voice.start(voiceMatch[1]!, body.id, body.sdp, body.voice, request.signal), { headers: { "Cache-Control": "no-store" } })
+                if (voiceMatch[3] === "stop") { store.voice.stop(voiceMatch[1]!, voiceMatch[2]); return Response.json({ stopped: true }) }
+            }
             if (url.pathname === "/api/webhooks") return Response.json(store.webhooks.save(body), { status: 201 })
             const webhookMatch = /^\/api\/webhooks\/([a-f0-9-]{36})(?:\/(delete))?$/.exec(url.pathname)
             if (webhookMatch) {

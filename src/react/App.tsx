@@ -1,4 +1,5 @@
 import { ChatContextPage } from "./ChatContextPage"
+import { VoicePanel, type VoicePanelHandle } from "./VoicePanel"
 import { latestChat } from "../chat-state"
 import { DownloadChatButton } from "./DownloadChatButton"
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react"
@@ -46,6 +47,15 @@ export function App() {
     })
     const [config, setConfig] = useState<AppConfig | null>(null)
     const [draft, setDraft] = useState("")
+    const voicePanel = useRef<VoicePanelHandle>(null)
+    const pendingVoiceChat = useRef<string | null>(null)
+    const [voiceActive, setVoiceActive] = useState(false)
+    useEffect(() => {
+        if (chat && pendingVoiceChat.current === chat.id && voicePanel.current) {
+            pendingVoiceChat.current = null
+            voicePanel.current.start()
+        }
+    }, [chat?.id])
     const [cwd, setCwd] = useState("")
     const environmentsOpen = route.environments
     const [executionTarget, setExecutionTarget] = useState("")
@@ -367,7 +377,7 @@ export function App() {
                 </section> : <div className="conversation">
                     {loading && <div className="loading"><span className="spinner" />Loading conversation</div>}
                     {chat?.gpt && !chat.messages.length && <section className="gpt-chat-intro"><Icon name="spark" size={28} /><h1>{chat.gpt.name}</h1><p>{chat.gpt.description || "Send a message to start working with this agent."}</p></section>}
-                    {chat?.messages.map(message => isCompactionMessage(message) ? <CompactionMarker key={message.id} message={message} /> : message.role === "activity" ? <details className="activity" key={message.id}>
+                    {chat?.messages.map(message => isCompactionMessage(message) ? <CompactionMarker key={message.id} message={message} /> : message.role === "activity" && !["voice:user", "voice:assistant"].includes(message.detail ?? "") ? <details className="activity" key={message.id}>
                         <summary>{message.running ? <span className="spinner" /> : <Icon name="terminal" size={15} />}<span>{message.text}</span><CopyMessageButton text={[message.text, message.detail].filter(Boolean).join("\n\n")} /><Icon name="chevron" size={12} /></summary>
                         <pre>{message.detail ?? (message.running ? "Working…" : "Completed")}</pre>
                     </details> : <article id={`message-${message.id}`} key={message.id} className={`message ${message.role}`}>
@@ -389,6 +399,7 @@ export function App() {
             </div>
 
             <div className={`composer-region ${!selectedId ? "welcome-composer" : ""}`}>
+                {chat && <VoicePanel key={chat.id} chatId={chat.id} ref={voicePanel} onActiveChange={setVoiceActive} />}
                 {error && <div className="error-banner" role="alert">{error}<button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
                 {config && !config.authAvailable && <div className="auth-notice">Sign in with Codex on this machine to connect the agent. Your chats are saved locally.</div>}
                 <form className="composer" onSubmit={send}>
@@ -405,7 +416,18 @@ export function App() {
                             {config?.execution.targets.map(target => <option key={target.id} value={target.id}>{chat ? config?.execution.environments.find(environment => environment.id === chat.environmentId)?.name ?? target.id : `New ${target.id} environment`}</option>)}
                         </select></label><button type="button" className="workspace-button" onClick={() => chat?.environmentId ? navigate(`/environments/${chat.environmentId}`, selectedId) : openEnvironments()}>{chat ? "Open environment" : "Manage"}</button>
                         {chat && <button type="button" className="workspace-button" disabled={running || sending || changingTarget || !chat.messages.length} onClick={compact} title="Condense the agent context while keeping the conversation history">Compact context</button>}
-                    </div><div className="send-actions">{running && <button type="button" className="stop-button" aria-label="Stop agent" onClick={stop}><Icon name="stop" size={16} /></button>}<button type="submit" className="send-button" disabled={!draft.trim() || sending || changingTarget || loading || !config} aria-label={running ? "Send guidance" : "Send message"}>{sending ? <span className="spinner" /> : <Icon name="arrow" size={19} />}</button></div></div>
+                    </div><div className="send-actions">{running && <button type="button" className="stop-button" aria-label="Stop agent" onClick={stop}><Icon name="stop" size={16} /></button>}{draft.trim() ? <button type="submit" className="send-button" disabled={sending || changingTarget || loading || !config} aria-label={running ? "Send guidance" : "Send message"}>{sending ? <span className="spinner" /> : <Icon name="arrow" size={19} />}</button> : <button type="button" className="voice-icon-button" aria-label="Start voice" title={voiceActive ? "Voice is active" : "Start voice"} disabled={voiceActive || sending || changingTarget || loading || !config} onClick={async () => {
+                        if (chat) { voicePanel.current?.start(); return }
+                        setSending(true); setError("")
+                        try {
+                            const current = await api<Chat>("/api/chats", { cwd, model, executionTarget: executionTarget || undefined })
+                            pendingVoiceChat.current = current.id
+                            setChat(current); setSelectedId(current.id); updateChat(current)
+                            navigate(chatPath(current.id), current.id)
+                            void api<AppConfig>("/api/config").then(setConfig)
+                        } catch (error) { setError(error instanceof Error ? error.message : "Could not create voice chat") }
+                        finally { setSending(false) }
+                    }}>{sending ? <span className="spinner" /> : <Icon name="voice" size={18} />}</button>}</div></div>
                     {workspaceOpen && <div className="workspace-editor"><label htmlFor="workspace">Working directory</label><input id="workspace" value={path} readOnly={!!selectedId} onChange={event => setCwd(event.target.value)} /><span>{selectedId ? "Start a new chat to choose another workspace." : "The workspace is mounted into a new environment for this chat."}</span></div>}
                 </form>
                 <p className="composer-footnote">{running ? "Follow-up messages guide the active turn." : config?.settings.enterToSend === false ? "Ctrl/⌘ + Enter to send · Enter for a new line" : "Enter to send · Shift + Enter for a new line"}</p>

@@ -247,3 +247,39 @@ Open an environment and use **Webhooks** to create a private URL mapped to that 
 The receiver preserves the HTTP method, raw body, provider signature headers, and query parameters. It forwards to the configured path, returns the upstream status/body, and does not follow redirects. Cookie and proxy headers are filtered; responses cannot set app cookies or run active content on the app origin. Limits are 70 KB per request, 1 MB per response, and a 10-second upstream timeout. Browser-origin requests are rejected. Delivery is synchronous with no queue or automatic retry; unavailable/stopped environments return HTTP 502 and are not started automatically. Active deliveries prevent environment cleanup and refresh idle activity.
 
 Docker forwarding runs Bun's HTTP client inside the verified environment container, so no container ports need publishing (including rootless Docker and containers with no external network). Custom execution images must provide `bun`. The Host environment forwards to host localhost. PuppyGPT still binds to `127.0.0.1`; external providers need an HTTPS proxy/tunnel exposing only `/webhooks/*`, not the management API. Verify provider signatures in your destination handler.
+
+## Subscription voice
+
+With the composer empty, click the **Start voice** waveform in the send-button
+position. A new chat is created automatically if needed. Typing replaces the
+waveform with Send. Existing chats also let you choose a speaker above the composer.
+Allow the browser microphone prompt.
+**Mute** pauses microphone input; **End voice** releases the microphone and closes
+the call. Switching chats, navigating away, or reloading also ends voice. Tasks
+already accepted by the chat agent continue; use the existing Stop agent control
+to cancel them. Completed speech transcripts are saved in the chat as voice
+activity; delegated requests and agent results use the normal conversation flow.
+
+Voice uses the chat's saved ChatGPT account (or local Codex sign-in for local
+account chats), including the existing token refresh and encrypted account store.
+It does not require a Platform API key. The speaker model is `gpt-live-1-codex`;
+the chat's selected text model still performs delegated work in its assigned
+environment. Recent voice conversation accompanies delegated requests as context.
+When the chat agent is already busy, voice asks you to wait or use chat controls.
+
+This implements OpenClaw's browser WebRTC route: audio travels between the browser
+and OpenAI; PuppyGPT owns the authenticated sideband for transcripts and agent
+handoffs. OAuth tokens never reach the browser. Gateway audio relay is not
+implemented. Use a WebRTC-capable browser on localhost or HTTPS. Calls expire
+within 30 minutes; abandoned browser sessions are closed after 45 seconds without
+polling. Reconnect explicitly after a connection failure.
+
+The subscription wire contract was checked against OpenClaw's
+[`realtime-quicksilver-wire.ts`](https://github.com/openclaw/openclaw/blob/main/extensions/openai/realtime-quicksilver-wire.ts)
+and [`realtime-quicksilver.ts`](https://github.com/openclaw/openclaw/blob/main/extensions/openai/realtime-quicksilver.ts)
+on 2026-09-08: JSON call creation at
+`https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas`,
+`OpenAI-Alpha: quicksilver=v2`, and sideband at
+`wss://api.openai.com/v1/live/<call-id>`. This subscription protocol can change
+independently of the public Realtime API. A 403 can indicate account, model, or
+voice access; it does not uniquely identify which one failed.
