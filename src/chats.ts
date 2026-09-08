@@ -1,6 +1,8 @@
 import { WebhookStore } from "./webhooks"
 import { describeAgentContext } from "./agent/agent"
 import { IntegrationStore } from "./integrations"
+import { RoutingStore, normalizeSubscriptionEvent, type RoutingAction } from "./routing"
+import { ScheduleStore, type Schedule, type ScheduleInput, type ScheduleRun, type ScheduleTemplate } from "./schedules"
 import { Database } from "bun:sqlite"
 import { mkdir, chmod, realpath, stat } from "node:fs/promises"
 import { dirname, resolve } from "node:path"
@@ -19,6 +21,8 @@ type Row = { data: string, context: string | null }
 
 export class ChatStore {
     readonly integrations: IntegrationStore
+    readonly routing: RoutingStore
+    readonly schedules: ScheduleStore
     readonly webhooks: WebhookStore
     readonly gpts: GptStore
     readonly accounts: AccountStore
@@ -30,12 +34,15 @@ export class ChatStore {
     private listeners = new Set<(chat: Chat) => void>()
     private timers = new Map<string, ReturnType<typeof setTimeout>>()
     private tasks = new Set<Promise<void>>()
+    private turnTasks = new Map<string, Promise<{ ok: boolean, error?: string }>>()
     private compacting = new Set<string>()
     private checkpointUsers = new Map<string, string[]>()
     private preparing = new Map<string, AbortController>()
 
     constructor(private db: Database, readonly cwd: string, private agentOptions: AgentTurnOptions = {}, accountDirectory = resolve(cwd, ".puppygpt", "accounts"), environmentControl?: DockerControl) {
         this.integrations = new IntegrationStore(db, resolve(accountDirectory, "..", "integrations.key"))
+        this.routing = new RoutingStore(db)
+        this.schedules = new ScheduleStore(db)
         this.gpts = new GptStore(db)
         this.environments = new EnvironmentStore(db, agentOptions.executionPolicy ?? hostPolicy, environmentControl)
         this.webhooks = new WebhookStore(db, this.environments)
@@ -185,6 +192,7 @@ export class ChatStore {
         const configuration = await describeAgentContext({ ...this.agentOptions, cwd: chat.cwd,
             executionPolicy: { defaultTarget: target.id, targets: [target] },
             instructions: [this.agentOptions.instructions, settings.instructions, chat.gpt?.instructions].filter(Boolean).join("\n\n"),
+            functionTools: [...(this.agentOptions.functionTools ?? []), this.routing.agentTool(chat.id, () => this.integrations.list().map(({ id, provider, name, identity }) => ({ id, provider, name, identity }))), this.schedules.agentTool(chat.id, value => this.prepareScheduleInput(value))],
         })
         return { chatId: id, title: chat.title, model: chat.model, cwd: chat.cwd,
             reasoningEffort: chat.gpt?.reasoningEffort ?? settings.reasoningEffort,
@@ -208,6 +216,52 @@ export class ChatStore {
         this.publish(chat)
         return chat
     }
+
+    private scheduleTemplate(chat: Chat): ScheduleTemplate {
+        return { sourceChatId: chat.id, cwd: chat.cwd, model: chat.model, executionTarget: chat.executionTarget ?? (this.agentOptions.executionPolicy ?? hostPolicy).defaultTarget, accountId: chat.accountId ?? null, ...(chat.gpt ? { gpt: structuredClone(chat.gpt) } : {}) }
+    }
+    prepareScheduleInput(value: unknown): ScheduleInput {
+        if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected a schedule")
+        const input = structuredClone(value) as Record<string, unknown>
+        if (!input.target || typeof input.target !== "object" || Array.isArray(input.target)) throw new Error("Choose a schedule target")
+        const target = input.target as Record<string, unknown>
+        if (target.kind === "chat") {
+            if (typeof target.chatId !== "string" || !this.get(target.chatId)) throw new Error("Schedule target chat not found")
+        } else if (target.kind === "new_chat") {
+            const embedded = target.template && typeof target.template === "object" && !Array.isArray(target.template) ? target.template as Record<string, unknown> : undefined
+            const sourceChatId = typeof target.sourceChatId === "string" ? target.sourceChatId : typeof embedded?.sourceChatId === "string" ? embedded.sourceChatId : ""
+            const source = this.get(sourceChatId)
+            if (!source) throw new Error("Schedule template chat not found")
+            input.target = { kind: "new_chat", template: this.scheduleTemplate(source) }
+        } else throw new Error("Choose a specific chat or a fresh agent")
+        return input as ScheduleInput
+    }
+    private async createScheduledChat(template: ScheduleTemplate, schedule: Schedule, scheduledAt: string): Promise<Chat> {
+        const chat = await this.create(template.cwd, template.model, template.executionTarget)
+        if (template.accountId) this.accounts.authFile(template.accountId)
+        chat.accountId = template.accountId
+        if (template.gpt) chat.gpt = structuredClone(template.gpt)
+        const stamp = new Intl.DateTimeFormat("en", { timeZone: schedule.timing.timezone, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(scheduledAt))
+        chat.title = `${schedule.name} · ${stamp}`.slice(0, 64)
+        this.save(chat); this.publish(chat)
+        return chat
+    }
+    private async executeSchedule(schedule: Schedule, run: ScheduleRun): Promise<{ chatId: string }> {
+        let chat: Chat
+        if (schedule.target.kind === "chat") {
+            const target = this.get(schedule.target.chatId)
+            if (!target) { this.schedules.pauseForError(schedule.id, "Schedule target chat no longer exists"); throw new Error("Schedule target chat no longer exists") }
+            chat = target.status === "running" ? await this.createScheduledChat(this.scheduleTemplate(target), schedule, run.scheduledAt) : target
+        } else chat = await this.createScheduledChat(schedule.target.template, schedule, run.scheduledAt)
+        const prompt = `A scheduled wakeup is due.\n\nSchedule: ${schedule.name}\nSchedule ID: ${schedule.id}\nIntended time: ${run.scheduledAt}\n\n<scheduled_prompt>\n${schedule.prompt}\n</scheduled_prompt>`
+        this.send(chat.id, prompt, `Scheduled · ${schedule.name}\n${schedule.prompt}`)
+        const outcome = await this.turnTasks.get(chat.id)
+        if (!outcome) throw new Error("Scheduled agent turn did not start")
+        if (!outcome.ok) throw new Error(outcome.error ?? "Scheduled agent turn failed")
+        return { chatId: chat.id }
+    }
+    startSchedules() { this.schedules.start((schedule, run) => this.executeSchedule(schedule, run)) }
+    async runSchedulesNow() { await this.schedules.tick((schedule, run) => this.executeSchedule(schedule, run)); await this.schedules.settled() }
 
     private contextAt(chat: Chat, message: ChatMessage): Snapshot {
         const checkpoint = this.db.query<{ context: string }, [string, string]>("SELECT context FROM context_checkpoints WHERE chat_id = ? AND message_id = ?")
@@ -388,7 +442,7 @@ export class ChatStore {
                 const point = chat.messages.find(message => message.id === chat.forkMessageId)!
                 snapshot = { ...this.contextAt(chat, point), sessionId: crypto.randomUUID(), active: false }
             }
-            session = new AgentSession({ ...this.agentOptions, execute: this.agentOptions.execute ?? (input => this.environments.execute(environmentId, input)), executionPolicy, authFile, authStorage, cwd: chat.cwd, model: chat.model }, snapshot)
+            session = new AgentSession({ ...this.agentOptions, functionTools: [...(this.agentOptions.functionTools ?? []), this.routing.agentTool(chat.id, () => this.integrations.list().map(({ id, provider, name, identity }) => ({ id, provider, name, identity }))), this.schedules.agentTool(chat.id, value => this.prepareScheduleInput(value))], execute: this.agentOptions.execute ?? (input => this.environments.execute(environmentId, input)), executionPolicy, authFile, authStorage, cwd: chat.cwd, model: chat.model }, snapshot)
             this.sessions.set(chat.id, session)
         }
         return session
@@ -467,6 +521,7 @@ export class ChatStore {
                 else if (current.status !== "ready") throw new Error(`Environment is ${current.status}. Open Environments to repair it.`)
             }
         }
+        let outcome: { ok: boolean, error?: string } = { ok: true }
         const task = prepare().then(() => {
             preparation.signal.throwIfAborted()
             this.preparing.delete(id)
@@ -479,6 +534,7 @@ export class ChatStore {
             chat.status = "idle"
         }).catch(error => {
             const cancelled = error?.name === "AbortError"
+            outcome = { ok: false, error: cancelled ? "Scheduled agent turn was stopped" : error instanceof Error ? error.message : "The agent could not finish this turn." }
             chat.status = cancelled ? "idle" : "error"
             chat.messages.push({ id: crypto.randomUUID(), role: cancelled ? "activity" : "error", text: cancelled ? "Stopped" : error instanceof Error ? error.message : "The agent could not finish this turn." })
         }).finally(() => {
@@ -493,7 +549,37 @@ export class ChatStore {
             this.tasks.delete(task)
         })
         this.tasks.add(task)
+        this.turnTasks.set(id, task.then(() => outcome))
         return chat
+    }
+
+    async routeSubscriptionEvent(input: unknown) {
+        const event = normalizeSubscriptionEvent(input)
+        const result = this.routing.test(event)
+        const instructions = result.actions.filter((action): action is Extract<RoutingAction, { type: "add_instruction" }> => action.type === "add_instruction").map(action => action.text)
+        const labels = result.actions.filter((action): action is Extract<RoutingAction, { type: "label" }> => action.type === "label").map(action => action.value)
+        const deliveries = result.actions.filter((action): action is Extract<RoutingAction, { type: "deliver" }> => action.type === "deliver")
+        const ignored = result.actions.some(action => action.type === "ignore")
+        const prompt = [
+            "A host subscription routed this external event to your agent loop.",
+            instructions.length ? `Routing instructions:\n${instructions.map(value => `- ${value}`).join("\n")}` : "",
+            labels.length ? `Routing labels: ${labels.join(", ")}` : "",
+            `<subscription_event>\n${JSON.stringify(event, null, 2)}\n</subscription_event>`,
+        ].filter(Boolean).join("\n\n")
+        const displayText = event.message?.subject ?? event.message?.text ?? `${event.event.provider} ${event.event.type}`
+        const chatIds: string[] = []
+        if (!ignored) for (const action of deliveries) {
+            if (action.destination.kind === "chat") {
+                if (!this.get(action.destination.chatId)) throw new Error(`Routing destination chat not found: ${action.destination.chatId}`)
+                this.send(action.destination.chatId, prompt, displayText)
+                chatIds.push(action.destination.chatId)
+            } else {
+                const chat = await this.create(undefined, undefined, undefined, action.destination.environmentId)
+                this.send(chat.id, prompt, displayText)
+                chatIds.push(chat.id)
+            }
+        }
+        return { ...result, delivered: chatIds, replies: result.actions.filter((action): action is Extract<RoutingAction, { type: "reply" }> => action.type === "reply") }
     }
 
     private interact(chat: Chat, turnId: string, event: AgentInteraction) {
@@ -536,7 +622,7 @@ export class ChatStore {
                 message.image = { path: event.path, prompt: event.prompt }
                 changed = message
             }
-        } else if (event.type === "tool_start" || event.type === "image_start" || event.type === "web_search" || event.type === "imagegen_start") {
+        } else if (event.type === "tool_start" || event.type === "image_start" || event.type === "web_search" || event.type === "imagegen_start" || event.type === "function_tool_start") {
             const id = `${turnId}:${event.callId}`
             let message = chat.messages.find(message => message.id === id)
             if (!message) {
@@ -544,20 +630,21 @@ export class ChatStore {
                 chat.messages.push(message)
             }
             changed = message
-            message.text = event.type === "tool_start" ? `[${event.target ?? "host"}] ${event.command}` : event.type === "image_start" ? `Viewing ${event.path}` : event.type === "imagegen_start" ? "Generating image" : "Searching the web"
+            message.text = event.type === "tool_start" ? `[${event.target ?? "host"}] ${event.command}` : event.type === "image_start" ? `Viewing ${event.path}` : event.type === "imagegen_start" ? "Generating image" : event.type === "function_tool_start" ? event.label : "Searching the web"
             if (event.type === "imagegen_start") message.detail = event.prompt
             if (event.type === "web_search") message.running = event.status !== "completed"
         } else if (event.type === "tool_output") {
             const message = chat.messages.find(message => message.id === `${turnId}:${event.callId}`)
             changed = message
             if (message) message.detail = ((message.detail ?? "") + event.chunk.text).slice(-16_384)
-        } else if (event.type === "tool_result" || event.type === "tool_error" || event.type === "image_result") {
+        } else if (event.type === "tool_result" || event.type === "tool_error" || event.type === "image_result" || event.type === "function_tool_result") {
             const message = chat.messages.find(message => message.id === `${turnId}:${event.callId}`)
             if (message) {
                 changed = message
                 message.running = false
                 if (event.type === "tool_error") message.detail = event.error
                 if (event.type === "tool_result") message.detail = `${(event.result.stdout + event.result.stderr).slice(-16_384)}\n${event.result.backgrounded ? "Continuing in background" : `Exit ${event.result.exitCode}${event.result.timedOut ? " · timed out" : ""}`}\nFull output: ${event.result.outputPath}`
+                if (event.type === "function_tool_result") message.detail = event.output.slice(-16_384)
             }
         } else if (event.type === "compaction_start") {
             changed = { id: `${turnId}:${event.compactionId}`, role: "activity", text: "Compacting conversation", running: true }
@@ -590,12 +677,14 @@ export class ChatStore {
     async settled() { await Promise.all(this.tasks) }
 
     async close() {
+        this.schedules.stop()
         clearInterval(this.cleanupTimer)
         await this.cleanupTask
         await this.accounts.close()
         for (const preparation of this.preparing.values()) preparation.abort()
         for (const session of this.sessions.values()) session.stop()
         await this.settled()
+        await this.schedules.close()
         for (const timer of this.timers.values()) clearTimeout(timer)
         this.listeners.clear()
         this.db.close()
@@ -611,5 +700,6 @@ export const openChatStore = async () => {
     const store = new ChatStore(db, resolve(process.env.PUPPYGPT_WORKDIR ?? process.cwd()), { maxRetries: 3, executionPolicy }, resolve(dirname(databasePath), "accounts"))
     await store.accounts.migrateCredentials()
     store.startEnvironmentCleanup()
+    store.startSchedules()
     return store
 }

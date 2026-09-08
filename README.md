@@ -214,9 +214,31 @@ Test connection checks bot identity without sending any messages.
 
 Connections are independent of agent sessions. The intended messaging model is
 explicit outbound tools plus opt-in subscriptions to normalized incoming events.
-Saving a connection does not start listeners, send messages, or route incoming
-messages into the agent loop. Messaging tools and subscription adapters are not
-yet connected to the runtime.
+Saving a connection does not start listeners or send messages. Subscription
+adapters can submit normalized events to the local `/api/routing/events` endpoint;
+the ordered routing table then filters them and delivers selected events to agent
+loops. Telegram and Discord receiver processes are not yet connected.
+
+### Schedules
+
+Open **Schedules** in the sidebar, or use the clock button in a chat, to create a
+one-time or recurring agent wakeup. A schedule can continue a specific idle chat
+or create a fresh agent chat for every run. If a specific chat is already busy,
+PuppyGPT starts a fresh related chat rather than steering the active turn.
+
+Recurring schedules support start-anchored intervals or standard five-field cron
+expressions in an IANA timezone. Interval minutes and hours measure elapsed time;
+days and months preserve local wall time across daylight saving changes. Monthly
+intervals use the last day of shorter months, then return to the original day.
+Existing cron schedules keep their calendar-field behavior. Preview respects the
+maximum runs, including runs already claimed when editing a schedule.
+Start time is required; end time and maximum runs are optional for human-created
+schedules. Agent-created recurrence must include one of those limits. Schedules,
+next-run timestamps, run history, permissions, proposals, and audit entries are
+stored in SQLite. On restart, a run up to two minutes late executes once; older
+missed occurrences are recorded and skipped. Agents default to managing only
+their own schedules, and their access can be changed to observe, propose, or
+manage from the Schedules page.
 
 ### Environment webhooks
 

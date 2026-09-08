@@ -18,6 +18,7 @@ import { CompactionMarker, isCompactionMessage } from "./CompactionMarker"
 import { ForkMarker } from "./ForkMarker"
 import { MessageBranches } from "./MessageBranches"
 import { SettingsPage } from "./SettingsPage"
+import { SchedulesPage } from "./SchedulesPage"
 
 async function api<T>(path: string, body?: unknown): Promise<T> {
     const response = await fetch(path, body === undefined ? undefined : {
@@ -33,6 +34,7 @@ export function App() {
     const mapOpen = route.map
     const settingsOpen = route.settings
     const gptsOpen = route.gpts
+    const schedulesOpen = route.schedules
     const profileOpen = route.profile
     const contextOpen = route.context
     const [chats, setChats] = useState<ChatSummary[]>([])
@@ -78,7 +80,7 @@ export function App() {
     useEffect(() => {
         const sync = () => {
             const next = readRoute(new URL(location.href), history.state)
-            if (next.map || next.profile || next.gpts || next.settings || next.environments || next.chatId) history.replaceState({ chatId: next.chatId }, "", next.map ? "/map" : next.profile ? "/profile" : next.gpts ? "/gpts" : next.environments ? `/environments${next.environmentId ? `/${next.environmentId}` : ""}` : next.settings ? `/settings/${next.section}` : next.context ? `${chatPath(next.chatId)}/context` : chatPath(next.chatId))
+            if (next.map || next.profile || next.gpts || next.schedules || next.settings || next.environments || next.chatId) history.replaceState({ chatId: next.chatId }, "", next.map ? "/map" : next.profile ? "/profile" : next.gpts ? "/gpts" : next.schedules ? next.scheduleNew ? "/schedules/new" : "/schedules" : next.environments ? `/environments${next.environmentId ? `/${next.environmentId}` : ""}` : next.settings ? `/settings/${next.section}` : next.context ? `${chatPath(next.chatId)}/context` : chatPath(next.chatId))
             setRoute(next); setSelectedId(next.chatId)
         }
         sync()
@@ -155,7 +157,7 @@ export function App() {
     useEffect(() => {
         const attentionId = chat?.attentionId
         const id = chat?.id
-        if (!id || id !== selectedId || !attentionId || chat.status === "running" || settingsOpen || environmentsOpen || gptsOpen || profileOpen || mapOpen || contextOpen) return
+        if (!id || id !== selectedId || !attentionId || chat.status === "running" || settingsOpen || environmentsOpen || schedulesOpen || gptsOpen || profileOpen || mapOpen || contextOpen) return
         let pending = false
         let disposed = false
         let timer: ReturnType<typeof setTimeout> | undefined
@@ -178,7 +180,7 @@ export function App() {
         window.addEventListener("blur", schedule)
         document.addEventListener("visibilitychange", schedule)
         return () => { disposed = true; clearTimeout(timer); window.removeEventListener("focus", schedule); window.removeEventListener("blur", schedule); document.removeEventListener("visibilitychange", schedule) }
-    }, [chat?.id, chat?.attentionId, chat?.status, selectedId, settingsOpen, environmentsOpen, gptsOpen, profileOpen, mapOpen, contextOpen, connected])
+    }, [chat?.id, chat?.attentionId, chat?.status, selectedId, settingsOpen, environmentsOpen, schedulesOpen, gptsOpen, profileOpen, mapOpen, contextOpen, connected])
 
     const searchRevision = chats.map(chat => `${chat.id}:${chat.updatedAt}:${chat.status}:${chat.attentionId ?? ""}`).join("|")
     useEffect(() => {
@@ -312,6 +314,7 @@ export function App() {
             </nav>
             <button className={`settings-nav ${mapOpen ? "active" : ""}`} onClick={() => { navigate("/map", selectedId); if (window.innerWidth <= 760) setSidebarOpen(false) }} aria-current={mapOpen ? "page" : undefined}><Icon name="chat" size={18} />Branch map</button>
             <button disabled={sending || changingTarget} className={`settings-nav ${gptsOpen ? "active" : ""}`} onClick={() => { navigate("/gpts", selectedId); if (window.innerWidth <= 760) setSidebarOpen(false) }} aria-current={gptsOpen ? "page" : undefined}><Icon name="spark" size={18} />GPTs</button>
+            <button className={`settings-nav ${schedulesOpen ? "active" : ""}`} onClick={() => { navigate("/schedules", selectedId); if (window.innerWidth <= 760) setSidebarOpen(false) }} aria-current={schedulesOpen ? "page" : undefined}><Icon name="clock" size={18} />Schedules</button>
             <button disabled={!config} className={`settings-nav ${environmentsOpen ? "active" : ""}`} onClick={openEnvironments} aria-current={environmentsOpen ? "page" : undefined}><Icon name="terminal" size={18} />Environments</button>
             <button disabled={changingTarget} className={`settings-nav ${settingsOpen ? "active" : ""}`} onClick={() => openSettings(true)} aria-current={settingsOpen ? "page" : undefined}><Icon name="settings" size={18} />Settings</button>
 
@@ -337,7 +340,7 @@ export function App() {
         <main className="main">
             <header className="topbar"><nav className="breadcrumb" aria-label="Breadcrumb">
                 {!sidebarOpen && <button className="icon-button" aria-label="Open sidebar" onClick={() => setSidebarOpen(true)}><Icon name="panel" /></button>}
-                {breadcrumbLink(settingsOpen || environmentsOpen || gptsOpen || profileOpen || mapOpen || !selectedId ? "Workspace" : "Chats", "/")}
+                {breadcrumbLink(settingsOpen || environmentsOpen || schedulesOpen || gptsOpen || profileOpen || mapOpen || !selectedId ? "Workspace" : "Chats", "/")}
                 <Icon name="chevron" size={12} />
                 {environmentsOpen && route.environmentId ? <>
                     {breadcrumbLink("Environments", "/environments")}<Icon name="chevron" size={12} />
@@ -345,10 +348,10 @@ export function App() {
                 </> : contextOpen ? <>
                     {breadcrumbLink(chat?.title ?? "Chat", chatPath(selectedId))}<Icon name="chevron" size={12} />
                     <strong aria-current="page">Context</strong>
-                </> : <strong aria-current="page">{mapOpen ? "Branch map" : profileOpen ? "Profile" : gptsOpen ? "GPTs" : environmentsOpen ? "Environments" : settingsOpen ? "Settings" : chat?.title ?? (loading ? "Loading…" : "New chat")}</strong>}
-            </nav><div className="topbar-actions">{chat && !settingsOpen && !environmentsOpen && !gptsOpen && !profileOpen && !mapOpen && <><button className="icon-button" aria-label="View chat context" title="View chat context" onClick={() => navigate(`${chatPath(chat.id)}/context`, chat.id)}><Icon name="code" size={20} /></button><DownloadChatButton key={chat.id} chat={chat} /></>}<Notifications chats={chats} disabled={sending || changingTarget} onSelect={select} /><button className="local-avatar" aria-label="Open profile" title="Profile" aria-current={profileOpen ? "page" : undefined} onClick={() => { navigate("/profile", selectedId); if (window.innerWidth <= 760) setSidebarOpen(false) }}>P</button></div></header>
+                </> : <strong aria-current="page">{mapOpen ? "Branch map" : profileOpen ? "Profile" : gptsOpen ? "GPTs" : schedulesOpen ? "Schedules" : environmentsOpen ? "Environments" : settingsOpen ? "Settings" : chat?.title ?? (loading ? "Loading…" : "New chat")}</strong>}
+            </nav><div className="topbar-actions">{chat && !settingsOpen && !environmentsOpen && !schedulesOpen && !gptsOpen && !profileOpen && !mapOpen && <><button className="icon-button" aria-label="Schedule a wakeup" title="Schedule a wakeup" onClick={() => navigate("/schedules/new", chat.id)}><Icon name="clock" size={20} /></button><button className="icon-button" aria-label="View chat context" title="View chat context" onClick={() => navigate(`${chatPath(chat.id)}/context`, chat.id)}><Icon name="code" size={20} /></button><DownloadChatButton key={chat.id} chat={chat} /></>}<Notifications chats={chats} disabled={sending || changingTarget} onSelect={select} /><button className="local-avatar" aria-label="Open profile" title="Profile" aria-current={profileOpen ? "page" : undefined} onClick={() => { navigate("/profile", selectedId); if (window.innerWidth <= 760) setSidebarOpen(false) }}>P</button></div></header>
 
-            {contextOpen && selectedId ? <ChatContextPage key={selectedId} chatId={selectedId} onBack={() => select(selectedId)} /> : mapOpen ? <BranchMap chats={chats} selectedId={selectedId} onOpen={select} /> : profileOpen ? <ProfilePage config={config} navigate={path => navigate(path, selectedId)} /> : gptsOpen ? <GptsPage onStart={current => { updateChat(current); select(current.id) }} /> : environmentsOpen ? config ? <EnvironmentsPage key={route.environmentId ?? "list"} environmentId={route.environmentId} navigate={path => navigate(path, selectedId)} targets={config.execution.targets} onChange={() => { void api<AppConfig>("/api/config").then(setConfig).catch(error => setError(error.message)) }} /> : <div className="settings-scroll"><p role={error ? "alert" : "status"}>{error || "Loading environments…"}</p></div> : settingsOpen ? <SettingsPage section={route.section} onSectionChange={(section: SettingsSection) => navigate(`/settings/${section}`, selectedId)} onClose={() => openSettings(false)} onSave={settings => {
+            {contextOpen && selectedId ? <ChatContextPage key={selectedId} chatId={selectedId} onBack={() => select(selectedId)} /> : mapOpen ? <BranchMap chats={chats} selectedId={selectedId} onOpen={select} /> : profileOpen ? <ProfilePage config={config} navigate={path => navigate(path, selectedId)} /> : gptsOpen ? <GptsPage onStart={current => { updateChat(current); select(current.id) }} /> : schedulesOpen ? <SchedulesPage key={route.scheduleNew ? `new-${selectedId}` : "list"} chats={chats} initialChatId={selectedId} startCreating={route.scheduleNew} onEditorClose={() => { if (route.scheduleNew) navigate("/schedules", selectedId) }} onOpenChat={select} /> : environmentsOpen ? config ? <EnvironmentsPage key={route.environmentId ?? "list"} environmentId={route.environmentId} navigate={path => navigate(path, selectedId)} targets={config.execution.targets} onChange={() => { void api<AppConfig>("/api/config").then(setConfig).catch(error => setError(error.message)) }} /> : <div className="settings-scroll"><p role={error ? "alert" : "status"}>{error || "Loading environments…"}</p></div> : settingsOpen ? <SettingsPage section={route.section} onSectionChange={(section: SettingsSection) => navigate(`/settings/${section}`, selectedId)} onClose={() => openSettings(false)} onSave={settings => {
                 setConfig(current => current ? { ...current, cwd: settings.cwd, settings } : current)
                 void api<AppConfig>("/api/config").then(setConfig).catch(error => setError(error.message))
                 setCwd(settings.cwd); setModel(settings.model)

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import type { Integration } from "../integrations"
+import { RoutingPanel } from "./RoutingPanel"
 async function request<T>(path: string, body?: unknown): Promise<T> {
     const response = await fetch(path, body === undefined ? undefined : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
     const result = await response.json()
@@ -54,7 +55,8 @@ export function IntegrationsPanel() {
                 <p className="settings-help">Stored encrypted. {provider === "telegram" ? <a href="https://core.telegram.org/bots/tutorial#obtain-your-bot-token" target="_blank" rel="noreferrer">Get a Telegram bot token</a> : <a href="https://discord.com/developers/applications" target="_blank" rel="noreferrer">Open Discord Developer Portal</a>}</p>
                 <div className="integration-actions"><button type="button" disabled={busy || !name.trim() || (!editing && !token.trim())} onClick={() => void save()}>{busy ? "Saving…" : "Save connection"}</button><button type="button" onClick={() => { setToken(""); setEditing(undefined) }}>Cancel</button></div>
             </fieldset>}
-            <p className="settings-help">Save and verify service access here. Message handling and agent tools are configured separately.</p>
+            <p className="settings-help">Credentials stay separate from message routing and agent permissions.</p>
+            <RoutingPanel integrations={items} />
         </>}
     </div>
 }

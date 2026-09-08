@@ -32,6 +32,10 @@ export const createChatApi = (store: ChatStore) => async (request: Request): Pro
             } catch { return new Response("Image unavailable", { status: 404 }) }
         }
         if (request.method === "GET" && url.pathname === "/api/integrations") return Response.json(store.integrations.list(), { headers: { "Cache-Control": "no-store" } })
+        if (request.method === "GET" && url.pathname === "/api/routing") return Response.json({ table: store.routing.table(), permissions: store.routing.permissions(), proposals: store.routing.proposals(), audit: store.routing.audit() }, { headers: { "Cache-Control": "no-store" } })
+        if (request.method === "GET" && url.pathname === "/api/schedules") return Response.json({ schedules: store.schedules.list(url.searchParams.get("archived") === "1"), permissions: store.schedules.permissions(), proposals: store.schedules.proposals() }, { headers: { "Cache-Control": "no-store" } })
+        const scheduleRuns = /^\/api\/schedules\/([a-f0-9-]{36})\/runs$/.exec(url.pathname)
+        if (request.method === "GET" && scheduleRuns) return Response.json(store.schedules.runs(scheduleRuns[1]!))
         if (request.method === "GET" && url.pathname === "/api/gpts") return Response.json(store.gpts.list())
         if (request.method === "GET" && url.pathname === "/api/config") return Response.json(await store.config())
         if (request.method === "GET" && url.pathname === "/api/settings") return Response.json(store.settings())
@@ -153,6 +157,47 @@ export const createChatApi = (store: ChatStore) => async (request: Request): Pro
                 if (integrationMatch[2] === "remove") { store.integrations.remove(id); return Response.json({ removed: true }) }
                 return Response.json(store.integrations.save(body, id))
             }
+            if (url.pathname === "/api/routing/test") return Response.json(store.routing.test(body.event))
+            if (url.pathname === "/api/routing/events") return Response.json(await store.routeSubscriptionEvent(body.event), { status: 202 })
+            if (url.pathname === "/api/routing/rules") {
+                if (!Number.isSafeInteger(body.expectedRevision)) throw new Error("expectedRevision is required")
+                return Response.json(store.routing.putRule(body.rule, body.expectedRevision), { status: 201 })
+            }
+            const routingRule = /^\/api\/routing\/rules\/([a-f0-9-]{36})(?:\/(disable))?$/.exec(url.pathname)
+            if (routingRule) {
+                if (!Number.isSafeInteger(body.expectedRevision)) throw new Error("expectedRevision is required")
+                return Response.json(routingRule[2] ? store.routing.disableRule(routingRule[1]!, body.expectedRevision) : store.routing.putRule(body.rule, body.expectedRevision, routingRule[1]!))
+            }
+            if (url.pathname === "/api/routing/fallback") {
+                if (!Number.isSafeInteger(body.expectedRevision)) throw new Error("expectedRevision is required")
+                return Response.json(store.routing.setFallback(body.actions, body.expectedRevision))
+            }
+            const routingPermission = /^\/api\/routing\/permissions\/([a-f0-9-]{36})$/.exec(url.pathname)
+            if (routingPermission) {
+                if (!store.get(routingPermission[1]!)) throw new Error("Chat not found")
+                return Response.json(store.routing.setPermission(routingPermission[1]!, body))
+            }
+            const routingProposal = /^\/api\/routing\/proposals\/([a-f0-9-]{36})\/(approve|reject)$/.exec(url.pathname)
+            if (routingProposal) return Response.json(store.routing.resolveProposal(routingProposal[1]!, routingProposal[2] === "approve"))
+            if (url.pathname === "/api/schedules/preview") {
+                if (body.scheduleId !== undefined && typeof body.scheduleId !== "string") throw new Error("Invalid schedule ID")
+                const runCount = body.scheduleId ? store.schedules.get(body.scheduleId).runCount : 0
+                return Response.json({ nextRuns: store.schedules.preview(body.timing, body.count, undefined, runCount) })
+            }
+            if (url.pathname === "/api/schedules") return Response.json(store.schedules.create(store.prepareScheduleInput(body.schedule)), { status: 201 })
+            const scheduleMatch = /^\/api\/schedules\/([a-f0-9-]{36})(?:\/(pause|resume|archive))?$/.exec(url.pathname)
+            if (scheduleMatch) {
+                if (!Number.isSafeInteger(body.expectedRevision)) throw new Error("expectedRevision is required")
+                if (scheduleMatch[2]) return Response.json(store.schedules.setStatus(scheduleMatch[1]!, scheduleMatch[2] as "pause" | "resume" | "archive", body.expectedRevision))
+                return Response.json(store.schedules.update(scheduleMatch[1]!, store.prepareScheduleInput(body.schedule), body.expectedRevision))
+            }
+            const schedulePermission = /^\/api\/schedule-permissions\/([a-f0-9-]{36})$/.exec(url.pathname)
+            if (schedulePermission) {
+                if (!store.get(schedulePermission[1]!)) throw new Error("Chat not found")
+                return Response.json(store.schedules.setPermission(schedulePermission[1]!, body))
+            }
+            const scheduleProposal = /^\/api\/schedule-proposals\/([a-f0-9-]{36})\/(approve|reject)$/.exec(url.pathname)
+            if (scheduleProposal) return Response.json(store.schedules.resolveProposal(scheduleProposal[1]!, scheduleProposal[2] === "approve"))
             if (url.pathname === "/api/settings") return Response.json(await store.saveSettings(body))
             if (url.pathname === "/api/chats") {
                 if (body.gptId !== undefined && (typeof body.gptId !== "string" || !body.gptId)) throw new Error("Choose a GPT")

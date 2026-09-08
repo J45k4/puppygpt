@@ -95,6 +95,13 @@ export type RunAgentOptions = {
     onToolCall?: (command: string) => void
     onInteraction?: (interaction: AgentInteraction) => void | Promise<void>
     loadWorkspaceInstructions?: () => Promise<string>
+    functionTools?: AgentFunctionTool[]
+}
+
+export type AgentFunctionTool = {
+    definition: JsonObject
+    execute: (arguments_: JsonObject) => unknown | Promise<unknown>
+    label?: (arguments_: JsonObject) => string
 }
 
 export type AgentTurnOptions = Omit<RunAgentOptions, "prompt">
@@ -116,6 +123,8 @@ export type AgentInteraction =
     | { type: "imagegen_start", step: number, callId: string, prompt: string }
     | { type: "imagegen_result", step: number, callId: string, path: string, prompt: string }
     | { type: "web_search", step: number, callId: string, status: "in_progress" | "searching" | "completed" }
+    | { type: "function_tool_start", step: number, callId: string, name: string, label: string }
+    | { type: "function_tool_result", step: number, callId: string, name: string, output: string }
     | { type: "final", step: number, text: string }
 
 const requestHeaders = (auth: AgentAuth, sessionId: string): Headers => {
@@ -263,7 +272,13 @@ export async function describeAgentContext(options: AgentTurnOptions) {
     const execTool = { ...EXEC_TOOL, description: `Execute a shell command on a runtime-approved target. Allowed targets: ${targetDescription(policy)}. Default: ${policy.defaultTarget}. Host commands can background on steering; Docker commands finish or time out. Docker paths are container paths; reported output files are on the host.`, parameters: {
         ...asObject(EXEC_TOOL.parameters), properties: { ...asObject(asObject(EXEC_TOOL.parameters)?.properties), target: { type: "string", enum: policy.targets.map(t => t.id), description: "Runtime-approved execution target" } }, required: ["command", "timeout_ms", "target"],
     } }
-    const tools = [execTool, viewImageTool(cwd), WEB_SEARCH_TOOL, IMAGEGEN_TOOL]
+    const builtInNames = new Set(["exec", "view_image", "imagegen"])
+    for (const tool of options.functionTools ?? []) {
+        const name = asString(tool.definition.name)
+        if (!name || builtInNames.has(name)) throw new Error(`Invalid custom function tool name: ${name ?? "missing"}`)
+        builtInNames.add(name)
+    }
+    const tools = [execTool, viewImageTool(cwd), WEB_SEARCH_TOOL, IMAGEGEN_TOOL, ...(options.functionTools ?? []).map(tool => tool.definition)]
     const workspaceInstructions = options.loadWorkspaceInstructions
         ? await options.loadWorkspaceInstructions()
         : await readFile(join(cwd, "AGENTS.md"), "utf8").catch(error => {
@@ -656,6 +671,21 @@ export class AgentSession {
                 let callId = asString(call.call_id) ?? "unknown"
                 let output: string | JsonObject[]
                 try {
+                    const customName = asString(call.name)
+                    const customTool = options.functionTools?.find(tool => tool.definition.name === customName)
+                    if (customTool && customName) {
+                        const argumentsJson = asString(call.arguments)
+                        const arguments_ = argumentsJson ? asObject(JSON.parse(argumentsJson)) : {}
+                        if (!arguments_) throw new Error(`${customName} requires an object argument`)
+                        callId = asString(call.call_id) ?? callId
+                        const label = customTool.label?.(arguments_) ?? customName
+                        await options.onInteraction?.({ type: "function_tool_start", step: step + 1, callId, name: customName, label })
+                        const result = await customTool.execute(arguments_)
+                        output = typeof result === "string" ? result : JSON.stringify(result)
+                        await options.onInteraction?.({ type: "function_tool_result", step: step + 1, callId, name: customName, output })
+                        this.input.push({ type: "function_call_output", call_id: callId, output })
+                        continue
+                    }
                     const parsed = parseFunctionCall(call)
                     callId = parsed.callId
                     if (parsed.name === "imagegen") {
