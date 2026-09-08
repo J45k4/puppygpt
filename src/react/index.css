@@ -1434,3 +1434,10 @@ h1 {
 .voice-icon-button:hover:not(:disabled) { background: #e9e9eb; }
 .voice-icon-button:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
 .voice-icon-button:disabled { opacity: .45; cursor: not-allowed; }
+.voice-mode { font-size: 12px; font-weight: 600; }
+.voice-controls .voice-respond-button { background: #20854d; border-color: #20854d; color: white; font-weight: 600; }
+.voice-controls button:disabled { opacity: .5; cursor: not-allowed; }
+.voice-transcript { margin-top: 10px; font-size: 13px; }
+.voice-transcript summary { cursor: pointer; }
+.voice-transcript-turns { max-height: 300px; overflow-y: auto; }
+.voice-transcript p { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; margin: 8px 0 0; }

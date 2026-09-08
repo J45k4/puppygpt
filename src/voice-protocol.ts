@@ -2,7 +2,7 @@
 export const VOICE_MODEL = "gpt-live-1-codex"
 export const VOICES = ["arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"] as const
 export const VOICE_CALL_URL = "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas"
-export type VoiceState = { id: string, chatId: string, status: "connecting" | "connected" | "closed" | "error", error?: string, transcript: { role: "user" | "assistant", text: string }[] }
+export type VoiceState = { id: string, chatId: string, status: "connecting" | "connected" | "closed" | "error", listenOnly: boolean, partialTranscript: string, error?: string, transcript: { role: "user" | "assistant", text: string }[] }
 
 export function validateVoiceOffer(sdp: unknown, voice: unknown): asserts sdp is string {
     if (typeof sdp !== "string" || sdp.length > 60_000 || !sdp.startsWith("v=0") || !/^m=audio /m.test(sdp) || /^m=(?!audio |application )/m.test(sdp)) throw new Error("Expected an audio-only WebRTC offer")

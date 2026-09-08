@@ -254,7 +254,21 @@ With the composer empty, click the **Start voice** waveform in the send-button
 position. A new chat is created automatically if needed. Typing replaces the
 waveform with Send. Existing chats also let you choose a speaker above the composer.
 Allow the browser microphone prompt.
-**Mute** pauses microphone input; **End voice** releases the microphone and closes
+Voice starts in **Listen only** by default. Speak for as long as you need, including
+pauses; **Your words so far** shows the incoming transcript. Playback is muted and
+the server blocks new agent handoffs until you click **Respond now**. Uncheck
+Listen only before starting if you prefer an ordinary conversation.
+
+**Respond now** releases the monologue and enables replies and agent work.
+**Listen only** during a conversation closes the old media/control connection and
+opens a fresh listening call, preventing old buffered replies from playing later.
+Already accepted agent tasks continue in the chat. Incoming transcript fragments
+are saved on end/disconnection even if the provider has not finalized the turn.
+Listen-only is enforced by playback and task guards; it is not a guarantee that
+OpenAI stops internal generation. The current backend rejects public Realtime
+turn-detection controls.
+
+**Mute** pauses microphone input; **End call** releases the microphone and closes
 the call. Switching chats, navigating away, or reloading also ends voice. Tasks
 already accepted by the chat agent continue; use the existing Stop agent control
 to cancel them. Completed speech transcripts are saved in the chat as voice
