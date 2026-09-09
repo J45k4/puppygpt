@@ -13,7 +13,11 @@ const server = serve<ShellSocketData>({
   port: Number(process.env.PORT ?? 3000),
   idleTimeout: 60,
   maxRequestBodySize: 100_000,
-  routes: { "/webhooks/*": (request: Request) => store.webhooks.handle(request), "/api/environments/:id/terminal": (request: Request, server: import("bun").Server<ShellSocketData>) => upgradeTerminal(request, server, store), "/api/*": api, "/*": index },
+  routes: { "/healthz": (request: Request) => {
+    const token = process.env.PUPPYGPT_HEALTH_TOKEN
+    if (!token || request.headers.get("Authorization") !== `Bearer ${token}`) return new Response(null, { status: 404 })
+    return Response.json({ token, busy: store.list().some(chat => chat.status === "running") }, { headers: { "Cache-Control": "no-store" } })
+  }, "/webhooks/*": (request: Request) => store.webhooks.handle(request), "/api/environments/:id/terminal": (request: Request, server: import("bun").Server<ShellSocketData>) => upgradeTerminal(request, server, store), "/api/*": api, "/*": index },
   websocket: terminalHandlers(store),
   development: process.env.NODE_ENV !== "production" && {
     hmr: true,

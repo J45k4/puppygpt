@@ -1,6 +1,6 @@
 {
   "name": "puppygpt",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,7 +9,9 @@
     "build:agent": "bun build ./src/agent/index.ts --target=bun --outdir=dist/agent",
     "dev": "bun --hot src/index.ts",
     "build": "bun build ./src/index.html --outdir=dist --sourcemap --target=browser --minify --define:process.env.NODE_ENV='\"production\"' --env='BUN_PUBLIC_*'",
-    "start": "NODE_ENV=production bun src/index.ts"
+    "start": "NODE_ENV=production bun src/index.ts",
+    "build:binary": "bun build --compile --minify src/launcher.ts --outfile=dist/puppygpt",
+    "start:auto-update": "bun src/update/supervisor.ts"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",

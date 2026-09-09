@@ -297,3 +297,69 @@ on 2026-09-08: JSON call creation at
 `wss://api.openai.com/v1/live/<call-id>`. This subscription protocol can change
 independently of the public Realtime API. A 403 can indicate account, model, or
 voice access; it does not uniquely identify which one failed.
+
+## Signed binary releases and automatic updates
+
+After updating `package.json` to the matching version, pushing a stable tag such
+as `v0.2.0` runs `.github/workflows/release.yml`.
+Actions uses Bun 1.3.11 to compile standalone binaries (including the frontend)
+for Linux and macOS, x64 and arm64. It signs `manifest.json` with Ed25519 and
+publishes the four binaries, manifest, and detached `manifest.sig` together.
+The manifest binds the repository, version, asset names, sizes, and SHA-256 hashes.
+Prereleases and non-semver tags are not accepted by the updater.
+
+Key provisioning is intentionally separate from this implementation:
+
+1. Embed the signing public key as an SPKI PEM string in
+   `src/update/trust.ts` (`RELEASE_PUBLIC_KEY`).
+2. Store the matching Ed25519 PKCS8 private PEM in the repository Actions secret
+   `RELEASE_SIGNING_PRIVATE_KEY`. Never commit the private key.
+3. Commit the public key and workflow before tagging a release. Signing fails if
+   the secret does not match the embedded public key. The empty default key makes
+   signing and automatic updates fail closed.
+
+Run a trusted binary normally with `./puppygpt-linux-x64`, or opt into automatic
+updates with `./puppygpt-linux-x64 --auto-update`. For a local build:
+
+```bash
+bun run build:binary
+bun run start:auto-update
+```
+
+The supervisor polls the public GitHub repository's latest stable release on
+startup and hourly thereafter. It verifies the signed manifest before downloading
+the platform binary, then verifies its exact size and checksum before making it
+executable. Downloads have time and size limits. Versions must increase; previously
+accepted releases are reverified on supervisor startup. No keys supplied by GitHub
+or environment variables are trusted.
+
+The supervisor stays alive while restarting the app, defers activation when its
+health check reports a running chat, and keeps the previous binary if the new
+process fails its startup health check. A chat starting between the idle check
+and shutdown can still be interrupted. Active terminals and voice sessions are
+closed on restart. Rollback restores the executable only, not database migrations;
+release migrations must remain compatible with the previous release. Keep normal
+data backups. A crash after the startup health check requires restarting the
+supervisor; run it under a process manager for unattended recovery.
+
+`PUPPYGPT_DATA_DIR` and `PUPPYGPT_WORKDIR` remain absolute and stable across
+versions. `PUPPYGPT_UPDATE_DIR` defaults to `.puppygpt/updates` and retains downloaded
+versions. `PUPPYGPT_UPDATE_INTERVAL_MS` changes the polling interval (minimum one
+minute). For source-based supervision, `PUPPYGPT_INITIAL_BINARY` overrides
+`dist/puppygpt`. Stop any existing server on the same port before starting the
+supervisor. A second supervisor using the same update directory is rejected;
+after SIGKILL or a machine crash, remove `supervisor.lock` from that directory
+only after confirming the old supervisor and child have stopped.
+
+The initial binary/supervisor is the trust anchor: obtain it through a trusted
+channel. The running supervisor keeps its embedded key throughout updates; key
+rotation requires explicitly installing a newly trusted supervisor. Private
+GitHub repositories and Windows binaries are not supported by this workflow.
+
+The top bar shows a download icon with a green dot when a newer release is
+available; hover for the version and click to open its GitHub release notes.
+The browser checks while visible, with GitHub results cached server-side for
+15 minutes (failed checks retry after five minutes). This indicator also works
+without automatic installation enabled. Before key provisioning it reports
+release availability only; after provisioning, it requires a valid signed
+manifest for the current platform. It never installs an update on click.

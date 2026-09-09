@@ -1,3 +1,4 @@
+import { getUpdateStatus } from "./update/status"
 import { chatFilename, exportChat, exportChatZip } from "./chat-export"
 import type { ChatStore } from "./chats"
 import { viewImage } from "./agent/image"
@@ -10,6 +11,7 @@ export const createChatApi = (store: ChatStore) => async (request: Request): Pro
     }
     if (!["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) return new Response("Invalid host", { status: 403 })
     try {
+        if (request.method === "GET" && url.pathname === "/api/updates") return Response.json(await getUpdateStatus(), { headers: { "Cache-Control": "no-store" } })
         const voiceMatch = /^\/api\/chats\/([^/]+)\/voice(?:\/([a-f0-9-]{36})(?:\/(stop|respond))?)?$/.exec(url.pathname)
         if (voiceMatch && !store.get(voiceMatch[1]!)) return Response.json({ error: "Chat not found" }, { status: 404 })
         if (request.method === "GET" && voiceMatch?.[2] && !voiceMatch[3]) return Response.json(store.voice.get(voiceMatch[1]!, voiceMatch[2]), { headers: { "Cache-Control": "no-store" } })
