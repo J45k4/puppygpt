@@ -10,7 +10,7 @@ const api = createChatApi(store)
 
 const server = serve<ShellSocketData>({
   hostname: "127.0.0.1",
-  port: Number(process.env.PORT ?? 3000),
+  port: Number(process.env.PORT ?? 8865),
   idleTimeout: 60,
   maxRequestBodySize: 100_000,
   routes: { "/healthz": (request: Request) => {

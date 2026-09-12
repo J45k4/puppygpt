@@ -363,3 +363,54 @@ The browser checks while visible, with GitHub results cached server-side for
 without automatic installation enabled. Before key provisioning it reports
 release availability only; after provisioning, it requires a valid signed
 manifest for the current platform. It never installs an update on click.
+
+## Install as a Linux user service
+
+From a trusted checkout, run:
+
+```bash
+bash install.sh
+# Or select a published release and a port:
+bash install.sh --version v0.0.1 --port 3001
+```
+
+The installer requires Linux (x64 or arm64), systemd, curl, jq, and OpenSSL 3+.
+It does not require Bun or sudo. It downloads the release manifest and signature,
+verifies the embedded Ed25519 public key, then verifies the binary's size and
+SHA-256 before installing or executing it. `install.sh` is also included as an
+asset in subsequent releases. Obtain the installer from a trusted checkout or
+GitHub release: its embedded public key is your initial trust anchor.
+
+The default paths are:
+
+- Binary: `~/.local/share/puppygpt/bin/puppygpt`
+- Data and update history: `~/.local/share/puppygpt/data`
+- Default chat workspace: `~/.local/share/puppygpt/workspace`
+- Configuration: `~/.config/puppygpt/service.env`
+- Unit: `~/.config/systemd/user/puppygpt.service`
+
+`XDG_DATA_HOME` and `XDG_CONFIG_HOME` override those base directories. Existing
+installations/configuration are never overwritten. This creates a fresh data
+store; it does not copy `.puppygpt` from your development checkout. Edit
+`service.env` to change the port or workspace, then restart the service. Keep the
+managed update directory dedicated to this service: systemd stops its entire
+process group and removes its empty supervisor lock after shutdown, including
+crashes. Automatic updates remain enabled via `--auto-update`.
+
+```bash
+systemctl --user status puppygpt
+systemctl --user restart puppygpt
+systemctl --user stop puppygpt
+journalctl --user -u puppygpt -f
+```
+
+The service starts on login. To keep it running after logout and start it at boot,
+run `loginctl enable-linger "$USER"` (your system may require administrator approval).
+Use `--no-start` to install files without enabling or starting the service.
+To disable it while preserving all data: `systemctl --user disable --now puppygpt`.
+
+The installer does not install Docker or the execution image. Docker environments
+still require accessible Docker and `puppygpt-exec:local` as described above;
+prefer rootless Docker. A user service inherits your home directory and can use
+your existing Codex login. Extra command paths or `DOCKER_HOST` can be configured
+in `service.env` when needed.

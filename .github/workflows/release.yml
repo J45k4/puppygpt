@@ -64,8 +64,10 @@ jobs:
           RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.RELEASE_SIGNING_PRIVATE_KEY }}
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: bun scripts/release.ts "$RELEASE_TAG" release/puppygpt-*
+      - name: Include service installer
+        run: install -m 755 install.sh release/install.sh
       - name: Publish signed binaries
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
-        run: gh release create "$RELEASE_TAG" release/puppygpt-* release/manifest.json release/manifest.sig --verify-tag --generate-notes
+        run: gh release create "$RELEASE_TAG" release/puppygpt-* release/manifest.json release/manifest.sig release/install.sh --verify-tag --generate-notes
