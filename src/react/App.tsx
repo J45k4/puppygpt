@@ -1,4 +1,6 @@
+import { IncomingMessage } from "./IncomingMessage"
 import { UpdateIndicator } from "./UpdateIndicator"
+import { ChatSettingsPage } from "./ChatSettingsPage"
 import { ChatContextPage } from "./ChatContextPage"
 import { VoicePanel, type VoicePanelHandle } from "./VoicePanel"
 import { latestChat } from "../chat-state"
@@ -38,6 +40,7 @@ export function App() {
     const gptsOpen = route.gpts
     const schedulesOpen = route.schedules
     const profileOpen = route.profile
+    const chatSettingsOpen = route.chatSettings
     const contextOpen = route.context
     const [chats, setChats] = useState<ChatSummary[]>([])
     const [selectedId, setSelectedId] = useState<string | null>(route.chatId)
@@ -87,11 +90,34 @@ export function App() {
     const [searchError, setSearchError] = useState("")
     const [searching, setSearching] = useState(false)
     const [following, setFollowing] = useState(true)
+    const [editingTitle, setEditingTitle] = useState(false)
+    const [titleDraft, setTitleDraft] = useState("")
+    const titleSaving = useRef(false)
+    const [editingSidebarTitle, setEditingSidebarTitle] = useState<string | null>(null)
+    const [sidebarTitleDraft, setSidebarTitleDraft] = useState("")
+    const sidebarTitleCancelled = useRef(false)
+    const [chatMenu, setChatMenu] = useState<{ id: string, x: number, y: number } | null>(null)
+    useEffect(() => {
+        if (!chatMenu) return
+        const close = () => setChatMenu(null)
+        window.addEventListener("pointerdown", close)
+        window.addEventListener("blur", close)
+        window.addEventListener("resize", close)
+        window.addEventListener("scroll", close, true)
+        window.addEventListener("keydown", close)
+        return () => {
+            window.removeEventListener("pointerdown", close)
+            window.removeEventListener("blur", close)
+            window.removeEventListener("resize", close)
+            window.removeEventListener("scroll", close, true)
+            window.removeEventListener("keydown", close)
+        }
+    }, [chatMenu])
 
     useEffect(() => {
         const sync = () => {
             const next = readRoute(new URL(location.href), history.state)
-            if (next.map || next.profile || next.gpts || next.schedules || next.settings || next.environments || next.chatId) history.replaceState({ chatId: next.chatId }, "", next.map ? "/map" : next.profile ? "/profile" : next.gpts ? "/gpts" : next.schedules ? next.scheduleNew ? "/schedules/new" : "/schedules" : next.environments ? `/environments${next.environmentId ? `/${next.environmentId}` : ""}` : next.settings ? `/settings/${next.section}` : next.context ? `${chatPath(next.chatId)}/context` : chatPath(next.chatId))
+            if (next.map || next.profile || next.gpts || next.schedules || next.settings || next.environments || next.chatId) history.replaceState({ chatId: next.chatId }, "", next.map ? "/map" : next.profile ? "/profile" : next.gpts ? "/gpts" : next.schedules ? next.scheduleNew ? "/schedules/new" : "/schedules" : next.environments ? `/environments${next.environmentId ? `/${next.environmentId}` : ""}` : next.settings ? `/settings/${next.section}` : next.chatSettings ? `${chatPath(next.chatId)}/settings` : next.context ? `${chatPath(next.chatId)}/context` : chatPath(next.chatId))
             setRoute(next); setSelectedId(next.chatId)
         }
         sync()
@@ -104,7 +130,11 @@ export function App() {
     }
 
     const updateChat = (incoming: Chat) => {
-        setChats(previous => [latestChat(previous.find(item => item.id === incoming.id) ?? null, incoming), ...previous.filter(item => item.id !== incoming.id)].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)))
+        setChats(previous => {
+            const updated = latestChat(previous.find(item => item.id === incoming.id) ?? null, incoming)
+            const summary = { ...updated, gptName: incoming.gpt?.name }
+            return [summary, ...previous.filter(item => item.id !== incoming.id)].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+        })
     }
 
     useEffect(() => {
@@ -168,7 +198,7 @@ export function App() {
     useEffect(() => {
         const attentionId = chat?.attentionId
         const id = chat?.id
-        if (!id || id !== selectedId || !attentionId || chat.status === "running" || settingsOpen || environmentsOpen || schedulesOpen || gptsOpen || profileOpen || mapOpen || contextOpen) return
+        if (!id || id !== selectedId || !attentionId || chat.status === "running" || settingsOpen || environmentsOpen || schedulesOpen || gptsOpen || profileOpen || mapOpen || contextOpen || chatSettingsOpen) return
         let pending = false
         let disposed = false
         let timer: ReturnType<typeof setTimeout> | undefined
@@ -191,7 +221,7 @@ export function App() {
         window.addEventListener("blur", schedule)
         document.addEventListener("visibilitychange", schedule)
         return () => { disposed = true; clearTimeout(timer); window.removeEventListener("focus", schedule); window.removeEventListener("blur", schedule); document.removeEventListener("visibilitychange", schedule) }
-    }, [chat?.id, chat?.attentionId, chat?.status, selectedId, settingsOpen, environmentsOpen, schedulesOpen, gptsOpen, profileOpen, mapOpen, contextOpen, connected])
+    }, [chat?.id, chat?.attentionId, chat?.status, selectedId, settingsOpen, environmentsOpen, schedulesOpen, gptsOpen, profileOpen, mapOpen, contextOpen, chatSettingsOpen, connected])
 
     const searchRevision = chats.map(chat => `${chat.id}:${chat.updatedAt}:${chat.status}:${chat.attentionId ?? ""}`).join("|")
     useEffect(() => {
@@ -301,6 +331,37 @@ export function App() {
         try { await api(`/api/chats/${chat.id}/stop`, {}) } catch (error) { setError(error instanceof Error ? error.message : "Could not stop") }
     }
 
+    const changeTitle = async () => {
+        if (!chat || !editingTitle || titleSaving.current) return
+        const title = titleDraft.trim()
+        if (title === chat.title) { setEditingTitle(false); return }
+        if (!title) { setError("Enter a chat name of 1–64 characters"); return }
+        titleSaving.current = true
+        setChangingTarget(true); setError("")
+        try {
+            const updated = await api<Chat>(`/api/chats/${chat.id}/title`, { title })
+            setChat(updated); updateChat(updated); setEditingTitle(false)
+        } catch (error) { setError(error instanceof Error ? error.message : "Could not change chat title") }
+        finally { titleSaving.current = false; setChangingTarget(false) }
+    }
+
+    const changeSidebarTitle = async (item: ChatSummary) => {
+        if (editingSidebarTitle !== item.id || titleSaving.current) return
+        if (sidebarTitleCancelled.current) { sidebarTitleCancelled.current = false; return }
+        const title = sidebarTitleDraft.trim()
+        if (title === item.title) { setEditingSidebarTitle(null); return }
+        if (!title) { setError("Enter a chat name of 1–64 characters"); return }
+        titleSaving.current = true
+        setChangingTarget(true); setError("")
+        try {
+            const updated = await api<Chat>(`/api/chats/${item.id}/title`, { title })
+            updateChat(updated)
+            if (chat?.id === updated.id) setChat(updated)
+            setEditingSidebarTitle(null)
+        } catch (error) { setError(error instanceof Error ? error.message : "Could not change chat title") }
+        finally { titleSaving.current = false; setChangingTarget(false) }
+    }
+
     const running = chat?.status === "running"
     const path = chat?.cwd ?? cwd
     const folder = path.split("/").filter(Boolean).at(-1) ?? "workspace"
@@ -314,8 +375,17 @@ export function App() {
             <label className="search"><Icon name="search" size={15} /><input value={filter} onChange={event => setFilter(event.target.value)} placeholder="Search titles and messages" maxLength={500} aria-label="Search chats" /></label>
             <div className="sidebar-section"><span className="sidebar-section-title">Your chats <span className="chat-count">{chats.length}</span></span><button disabled={sending || changingTarget} className="icon-button" onClick={() => select(null)} aria-label="New chat" title="New chat (Ctrl K)"><Icon name="plus" size={18} /></button></div>
             <nav className="chat-list" aria-label="Chats">
-                {visibleChats.map(item => <button disabled={sending || changingTarget} key={item.id} className={`chat-link ${item.id === selectedId ? "active" : ""}`} onClick={() => select(item.id)} title={item.title}>
-                    {item.status === "running" ? <span className="spinner" role="status" aria-label="Working" title="Working" /> : <Icon name="chat" size={15} />}<span>{item.title}</span>
+                {visibleChats.map(item => editingSidebarTitle === item.id ? <div key={item.id} className={`chat-link chat-link-editing ${item.id === selectedId ? "active" : ""}`}>
+                    {item.status === "running" ? <span className="spinner" role="status" aria-label="Working" title="Working" /> : <Icon name="chat" size={15} />}
+                    <input aria-label={`Rename ${item.title}`} value={sidebarTitleDraft} maxLength={64} autoFocus onFocus={event => event.currentTarget.select()} onChange={event => setSidebarTitleDraft(event.target.value)} onBlur={() => void changeSidebarTitle(item)} onKeyDown={event => {
+                        if (event.key === "Enter") { event.preventDefault(); void changeSidebarTitle(item) }
+                        if (event.key === "Escape") { event.preventDefault(); sidebarTitleCancelled.current = true; setEditingSidebarTitle(null) }
+                    }} />
+                </div> : <button disabled={sending || changingTarget} key={item.id} className={`chat-link ${item.id === selectedId ? "active" : ""}`} onClick={() => select(item.id)} onContextMenu={event => {
+                    event.preventDefault()
+                    setChatMenu({ id: item.id, x: Math.min(event.clientX, window.innerWidth - 150), y: Math.min(event.clientY, window.innerHeight - 54) })
+                }} title={`${item.title} · Right-click to rename`}>
+                    {item.status === "running" ? <span className="spinner" role="status" aria-label="Working" title="Working" /> : <Icon name="chat" size={15} />}<span className="chat-link-copy"><span className="chat-link-title">{item.title}</span>{item.gptName && <span className="chat-link-gpt"><Icon name="spark" size={10} />{item.gptName}</span>}</span>
                     {item.attentionId && item.status !== "running" && <span className="error-dot" aria-label="Needs attention" title="Needs attention — new activity" />}
                 </button>)}
                 {!chats.length && <p className="sidebar-empty">A little space for your next big idea.<br />Your chats will appear here.</p>}
@@ -348,6 +418,18 @@ export function App() {
                 }} />
         </aside>
 
+        {chatMenu && (() => {
+            const item = chats.find(chat => chat.id === chatMenu.id)
+            return item ? <div className="chat-context-menu" role="menu" aria-label={`Actions for ${item.title}`} style={{ left: chatMenu.x, top: chatMenu.y }} onPointerDown={event => event.stopPropagation()}>
+                <button type="button" role="menuitem" autoFocus onClick={() => {
+                    sidebarTitleCancelled.current = false
+                    setSidebarTitleDraft(item.title)
+                    setEditingSidebarTitle(item.id)
+                    setChatMenu(null)
+                }}><Icon name="edit" size={14} />Edit title</button>
+            </div> : null
+        })()}
+
         <main className="main">
             <header className="topbar"><nav className="breadcrumb" aria-label="Breadcrumb">
                 {!sidebarOpen && <button className="icon-button" aria-label="Open sidebar" onClick={() => setSidebarOpen(true)}><Icon name="panel" /></button>}
@@ -356,13 +438,16 @@ export function App() {
                 {environmentsOpen && route.environmentId ? <>
                     {breadcrumbLink("Environments", "/environments")}<Icon name="chevron" size={12} />
                     <strong aria-current="page">{route.environmentId === "new" ? "New environment" : config?.execution.environments.find(environment => environment.id === route.environmentId)?.name ?? "Environment"}</strong>
-                </> : contextOpen ? <>
+                </> : contextOpen || chatSettingsOpen ? <>
                     {breadcrumbLink(chat?.title ?? "Chat", chatPath(selectedId))}<Icon name="chevron" size={12} />
-                    <strong aria-current="page">Context</strong>
-                </> : <strong aria-current="page">{mapOpen ? "Branch map" : profileOpen ? "Profile" : gptsOpen ? "GPTs" : schedulesOpen ? "Schedules" : environmentsOpen ? "Environments" : settingsOpen ? "Settings" : chat?.title ?? (loading ? "Loading…" : "New chat")}</strong>}
-            </nav><div className="topbar-actions"><UpdateIndicator />{chat && !settingsOpen && !environmentsOpen && !schedulesOpen && !gptsOpen && !profileOpen && !mapOpen && <><button className="icon-button" aria-label="Schedule a wakeup" title="Schedule a wakeup" onClick={() => navigate("/schedules/new", chat.id)}><Icon name="clock" size={20} /></button><button className="icon-button" aria-label="View chat context" title="View chat context" onClick={() => navigate(`${chatPath(chat.id)}/context`, chat.id)}><Icon name="code" size={20} /></button><DownloadChatButton key={chat.id} chat={chat} /></>}<Notifications chats={chats} disabled={sending || changingTarget} onSelect={select} /><button className="local-avatar" aria-label="Open profile" title="Profile" aria-current={profileOpen ? "page" : undefined} onClick={() => { navigate("/profile", selectedId); if (window.innerWidth <= 760) setSidebarOpen(false) }}>P</button></div></header>
+                    <strong aria-current="page">{chatSettingsOpen ? "Chat settings" : "Context"}</strong>
+                </> : chat && !mapOpen && !profileOpen && !gptsOpen && !schedulesOpen && !environmentsOpen && !settingsOpen ? editingTitle ? <input className="chat-title-input" aria-label="Chat title" value={titleDraft} maxLength={64} autoFocus disabled={changingTarget} onChange={event => setTitleDraft(event.target.value)} onBlur={() => void changeTitle()} onKeyDown={event => {
+                    if (event.key === "Enter") { event.preventDefault(); void changeTitle() }
+                    if (event.key === "Escape") { event.preventDefault(); setTitleDraft(chat.title); setEditingTitle(false) }
+                }} /> : <button className="chat-title-button" aria-label={`Rename ${chat.title}`} title="Rename chat" onClick={() => { setTitleDraft(chat.title); setEditingTitle(true) }}>{chat.title}</button> : <strong aria-current="page">{mapOpen ? "Branch map" : profileOpen ? "Profile" : gptsOpen ? "GPTs" : schedulesOpen ? "Schedules" : environmentsOpen ? "Environments" : settingsOpen ? "Settings" : loading ? "Loading…" : "New chat"}</strong>}
+            </nav><div className="topbar-actions"><UpdateIndicator />{chat && !settingsOpen && !environmentsOpen && !schedulesOpen && !gptsOpen && !profileOpen && !mapOpen && <><button onClick={() => navigate(`${chatPath(chat.id)}/settings`, chat.id)}>Chat settings</button><button className="icon-button" aria-label="Schedule a wakeup" title="Schedule a wakeup" onClick={() => navigate("/schedules/new", chat.id)}><Icon name="clock" size={20} /></button><button className="icon-button" aria-label="View chat context" title="View chat context" onClick={() => navigate(`${chatPath(chat.id)}/context`, chat.id)}><Icon name="code" size={20} /></button><DownloadChatButton key={chat.id} chat={chat} /></>}<Notifications chats={chats} disabled={sending || changingTarget} onSelect={select} /><button className="local-avatar" aria-label="Open profile" title="Profile" aria-current={profileOpen ? "page" : undefined} onClick={() => { navigate("/profile", selectedId); if (window.innerWidth <= 760) setSidebarOpen(false) }}>P</button></div></header>
 
-            {contextOpen && selectedId ? <ChatContextPage key={selectedId} chatId={selectedId} onBack={() => select(selectedId)} /> : mapOpen ? <BranchMap chats={chats} selectedId={selectedId} onOpen={select} /> : profileOpen ? <ProfilePage config={config} navigate={path => navigate(path, selectedId)} /> : gptsOpen ? <GptsPage onStart={current => { updateChat(current); select(current.id) }} /> : schedulesOpen ? <SchedulesPage key={route.scheduleNew ? `new-${selectedId}` : "list"} chats={chats} initialChatId={selectedId} startCreating={route.scheduleNew} onEditorClose={() => { if (route.scheduleNew) navigate("/schedules", selectedId) }} onOpenChat={select} /> : environmentsOpen ? config ? <EnvironmentsPage key={route.environmentId ?? "list"} environmentId={route.environmentId} navigate={path => navigate(path, selectedId)} targets={config.execution.targets} onChange={() => { void api<AppConfig>("/api/config").then(setConfig).catch(error => setError(error.message)) }} /> : <div className="settings-scroll"><p role={error ? "alert" : "status"}>{error || "Loading environments…"}</p></div> : settingsOpen ? <SettingsPage section={route.section} onSectionChange={(section: SettingsSection) => navigate(`/settings/${section}`, selectedId)} onClose={() => openSettings(false)} onSave={settings => {
+            {chatSettingsOpen && selectedId ? <ChatSettingsPage key={selectedId} chatId={selectedId} onBack={() => select(selectedId)} onSave={current => { setChat(current); updateChat(current) }} /> : contextOpen && selectedId ? <ChatContextPage key={selectedId} chatId={selectedId} onBack={() => select(selectedId)} /> : mapOpen ? <BranchMap chats={chats} selectedId={selectedId} onOpen={select} /> : profileOpen ? <ProfilePage config={config} navigate={path => navigate(path, selectedId)} /> : gptsOpen ? <GptsPage onStart={current => { updateChat(current); select(current.id) }} /> : schedulesOpen ? <SchedulesPage key={route.scheduleNew ? `new-${selectedId}` : "list"} chats={chats} initialChatId={selectedId} startCreating={route.scheduleNew} onEditorClose={() => { if (route.scheduleNew) navigate("/schedules", selectedId) }} onOpenChat={select} /> : environmentsOpen ? config ? <EnvironmentsPage key={route.environmentId ?? "list"} environmentId={route.environmentId} navigate={path => navigate(path, selectedId)} targets={config.execution.targets} onChange={() => { void api<AppConfig>("/api/config").then(setConfig).catch(error => setError(error.message)) }} /> : <div className="settings-scroll"><p role={error ? "alert" : "status"}>{error || "Loading environments…"}</p></div> : settingsOpen ? <SettingsPage section={route.section} onSectionChange={(section: SettingsSection) => navigate(`/settings/${section}`, selectedId)} onClose={() => openSettings(false)} onSave={settings => {
                 setConfig(current => current ? { ...current, cwd: settings.cwd, settings } : current)
                 void api<AppConfig>("/api/config").then(setConfig).catch(error => setError(error.message))
                 setCwd(settings.cwd); setModel(settings.model)
@@ -389,7 +474,11 @@ export function App() {
                             </a>
                             <figcaption><a href={`/api/chats/${chat.id}/images/${encodeURIComponent(message.id)}`} download="puppygpt-image.png">Download image</a></figcaption>
                         </figure>}
-                        {message.role === "error" ? <div role="alert"><strong>Couldn’t finish this turn</strong><p>{message.text}</p><span>You can send another message to continue.</span></div> : message.role === "user" ? <div className="user-bubble">{message.text}</div> : <div className="markdown"><Markdown remarkPlugins={[remarkGfm]}>{message.text}</Markdown></div>}
+                        {message.role === "error" ? <div role="alert"><strong>Couldn’t finish this turn</strong><p>{message.text}</p><span>You can send another message to continue.</span></div> : message.role === "user" ? <IncomingMessage message={message} /> : <div className="markdown"><Markdown remarkPlugins={[remarkGfm]}>{message.text}</Markdown></div>}
+                        {message.role === "user" && message.detail && <details className="activity">
+                            <summary>Full agent input · source and instructions<CopyMessageButton text={message.detail} /></summary>
+                            <pre>{message.detail}</pre>
+                        </details>}
                         {message.role === "error" && <div className="message-actions"><CopyMessageButton text={message.text} /></div>}
                         {(message.role === "user" || message.role === "assistant") && <MessageBranches key={`${chat.id}:${message.id}`} chat={chat} message={message} chats={chats} config={config} onCreated={updateChat} onOpen={select} />}
                         {message.id === chat.forkMessageId && <ForkMarker onSource={() => select(chat.parentChatId!)} onMap={() => navigate("/map", selectedId)} />}

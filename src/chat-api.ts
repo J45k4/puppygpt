@@ -36,7 +36,10 @@ export const createChatApi = (store: ChatStore) => async (request: Request): Pro
                 })
             } catch { return new Response("Image unavailable", { status: 404 }) }
         }
+        if (request.method === "GET" && url.pathname === "/api/integrations/listeners") return Response.json(store.discord.statuses(), { headers: { "Cache-Control": "no-store" } })
         if (request.method === "GET" && url.pathname === "/api/integrations") return Response.json(store.integrations.list(), { headers: { "Cache-Control": "no-store" } })
+        const integrationChannels = /^\/api\/integrations\/([a-f0-9-]{36})\/channels$/.exec(url.pathname)
+        if (request.method === "GET" && integrationChannels) return Response.json(await store.integrations.channels(integrationChannels[1]!), { headers: { "Cache-Control": "no-store" } })
         if (request.method === "GET" && url.pathname === "/api/routing") return Response.json({ table: store.routing.table(), permissions: store.routing.permissions(), proposals: store.routing.proposals(), audit: store.routing.audit() }, { headers: { "Cache-Control": "no-store" } })
         if (request.method === "GET" && url.pathname === "/api/schedules") return Response.json({ schedules: store.schedules.list(url.searchParams.get("archived") === "1"), permissions: store.schedules.permissions(), proposals: store.schedules.proposals() }, { headers: { "Cache-Control": "no-store" } })
         const scheduleRuns = /^\/api\/schedules\/([a-f0-9-]{36})\/runs$/.exec(url.pathname)
@@ -72,7 +75,7 @@ export const createChatApi = (store: ChatStore) => async (request: Request): Pro
             })
             return new Response(stream, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no" } })
         }
-        const match = /^\/api\/chats\/([^/]+)(?:\/(messages|stop|execution-target|environment|model|viewed|fork|download|compact|context))?$/.exec(url.pathname)
+        const match = /^\/api\/chats\/([^/]+)(?:\/(messages|stop|execution-target|environment|model|title|viewed|fork|download|compact|context|gpt))?$/.exec(url.pathname)
         if (match && !store.get(match[1]!)) return Response.json({ error: "Chat not found" }, { status: 404 })
         if (request.method === "GET" && match?.[2] === "context") return Response.json(await store.context(match[1]!), { headers: { "Cache-Control": "no-store" } })
         if (request.method === "GET" && match?.[2] === "download") {
@@ -168,6 +171,8 @@ export const createChatApi = (store: ChatStore) => async (request: Request): Pro
                 return Response.json(store.integrations.save(body, id))
             }
             if (url.pathname === "/api/routing/test") return Response.json(store.routing.test(body.event))
+            const retryListener = /^\/api\/integrations\/([a-f0-9-]{36})\/retry-listener$/.exec(url.pathname)
+            if (retryListener) { store.discord.retry(retryListener[1]!); return Response.json({ ok: true }) }
             if (url.pathname === "/api/routing/events") return Response.json(await store.routeSubscriptionEvent(body.event), { status: 202 })
             if (url.pathname === "/api/routing/rules") {
                 if (!Number.isSafeInteger(body.expectedRevision)) throw new Error("expectedRevision is required")
@@ -215,7 +220,12 @@ export const createChatApi = (store: ChatStore) => async (request: Request): Pro
                 if (body.model !== undefined && typeof body.model !== "string") throw new Error("Invalid model")
                 if (body.environmentId !== undefined && typeof body.environmentId !== "string") throw new Error("Invalid environment")
                 if (body.executionTarget !== undefined && typeof body.executionTarget !== "string") throw new Error("Invalid execution target")
-                return Response.json(await store.create(body.cwd, body.model, body.executionTarget, body.environmentId, body.gptId), { status: 201 })
+                if (body.title !== undefined && (typeof body.title !== "string" || !body.title.trim() || body.title.trim().length > 64)) throw new Error("Enter a chat name of 1–64 characters")
+                return Response.json(await store.create(body.cwd, body.model, body.executionTarget, body.environmentId, body.gptId, body.title), { status: 201 })
+            }
+            if (match?.[2] === "gpt") {
+                if (body.gptId !== null && (typeof body.gptId !== "string" || !body.gptId)) throw new Error("Choose a GPT or default PuppyGPT")
+                return Response.json(store.setGpt(match[1]!, body.gptId as string | null))
             }
             if (match?.[2] === "fork") {
                 if (typeof body.messageId !== "string") throw new Error("Choose a message to fork")
@@ -233,6 +243,10 @@ export const createChatApi = (store: ChatStore) => async (request: Request): Pro
             if (match?.[2] === "model") {
                 if (typeof body.model !== "string") throw new Error("Choose a model")
                 return Response.json(store.setModel(match[1]!, body.model))
+            }
+            if (match?.[2] === "title") {
+                if (typeof body.title !== "string") throw new Error("Enter a chat name of 1–64 characters")
+                return Response.json(store.setTitle(match[1]!, body.title))
             }
             if (match?.[2] === "environment") {
                 if (typeof body.environmentId !== "string") throw new Error("Choose an environment")

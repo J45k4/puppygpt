@@ -132,6 +132,7 @@ export function VoicePanel({ chatId, ref, onActiveChange }: { chatId: string, re
     }
     useImperativeHandle(ref, () => ({ start: () => { void start() } }))
     const state = status === "connected" ? muted ? "muted" : "live" : status === "connecting" ? "connecting" : "off"
+    if (!active) return error && !/permission dismissed/i.test(error) ? <div className="error-banner" role="alert">{error} <button type="button" onClick={() => setError("")}>Dismiss</button></div> : null
     return <section className="voice-panel" data-state={state} aria-label="Voice conversation">
         <div className="voice-controls">
             <span className="voice-status" role="status"><span className="voice-status-dot" aria-hidden="true" />{state === "live" ? "Voice call live · Mic on" : state === "muted" ? "Voice call live · Mic muted" : state === "connecting" ? "Connecting voice…" : "Voice is off"}</span>

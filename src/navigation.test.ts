@@ -3,8 +3,8 @@ import { chatPath, readRoute } from "./navigation"
 const route = (path: string, state?: unknown) => readRoute(new URL(path, "http://localhost:3000"), state)
 test("settings deep links and legacy links resolve to the correct section", () => {
     for (const section of ["accounts", "integrations", "preferences", "agent"] as const) {
-        expect(route(`/settings/${section}`)).toEqual({ context: false, map: false, profile: false, gpts: false, schedules: false, scheduleNew: false, settings: true, environments: false, environmentId: null, section, chatId: null })
-        expect(route(`/?settings=1&section=${section}&chat=old`)).toEqual({ context: false, map: false, profile: false, gpts: false, schedules: false, scheduleNew: false, settings: true, environments: false, environmentId: null, section, chatId: "old" })
+        expect(route(`/settings/${section}`)).toEqual({ context: false, chatSettings: false, map: false, profile: false, gpts: false, schedules: false, scheduleNew: false, settings: true, environments: false, environmentId: null, section, chatId: null })
+        expect(route(`/?settings=1&section=${section}&chat=old`)).toEqual({ context: false, chatSettings: false, map: false, profile: false, gpts: false, schedules: false, scheduleNew: false, settings: true, environments: false, environmentId: null, section, chatId: "old" })
     }
     expect(route("/settings").section).toBe("accounts")
     expect(route("/settings/unknown").section).toBe("accounts")
@@ -29,7 +29,7 @@ test("chat paths support deep links, encoded IDs, and legacy query links", () =>
 })
 
 test("environment page preserves the chat return context", () => {
-    expect(route("/environments", { chatId: "saved" })).toEqual({ context: false, map: false, profile: false, gpts: false, schedules: false, scheduleNew: false, environments: true, environmentId: null, settings: false, section: "accounts", chatId: "saved" })
+    expect(route("/environments", { chatId: "saved" })).toEqual({ context: false, chatSettings: false, map: false, profile: false, gpts: false, schedules: false, scheduleNew: false, environments: true, environmentId: null, settings: false, section: "accounts", chatId: "saved" })
     expect(route("/environments/").environments).toBeTrue()
     expect(route("/environments/default-host").environmentId).toBe("default-host")
     expect(route("/environments/default-host", { chatId: "saved" }).chatId).toBe("saved")
@@ -54,3 +54,5 @@ test("branch map supports deep links and preserves the selected conversation", (
 })
 
 test("context deep links identify their chat", () => { expect(route("/chat/abc/context").context).toBeTrue(); expect(route("/chat/abc/context").chatId).toBe("abc"); expect(route("/chat/abc").context).toBeFalse() })
+
+test("chat settings deep links preserve the chat", () => { expect(route("/chat/abc/settings")).toMatchObject({ chatId: "abc", chatSettings: true, settings: false, context: false }); expect(route("/chat/abc/context").chatSettings).toBeFalse() })

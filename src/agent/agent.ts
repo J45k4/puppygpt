@@ -24,8 +24,7 @@ const TOOL_ONLY_COMPLETION_TEXT = "Done."
 const MAX_REQUEST_RETRIES = 360
 const RETRY_BASE_DELAY_MS = 1_000
 const RETRY_MAX_DELAY_MS = 60_000
-const coreInstructions = (cwd: string): string => `Your name is PuppyGPT, a general-purpose assistant that can carry out tasks using tools.
-Your working directory is ${cwd}.
+const coreInstructions = (cwd: string, customIdentity = false): string => `${customIdentity ? "" : "Your name is PuppyGPT, a general-purpose assistant that can carry out tasks using tools.\n"}Your working directory is ${cwd}.
 The root ${cwd}/AGENTS.md content is included below when the file exists. Find and read every other AGENTS.md that applies to the files you inspect or change. Each AGENTS.md governs its directory and descendants; deeper instructions take precedence.
 Follow the user's request, verify your work, and report results accurately.`
 
@@ -77,6 +76,7 @@ const RESPONSE_INCLUDES = ["reasoning.encrypted_content", "web_search_call.actio
 export type RunAgentOptions = {
     cwd?: string
     instructions?: string
+    customIdentity?: boolean
     maxRetries?: number
     prompt: string
     model?: string
@@ -285,7 +285,7 @@ export async function describeAgentContext(options: AgentTurnOptions) {
             if (error.code === "ENOENT") return ""
             throw error
         })
-    const instructions = [coreInstructions(cwd), options.instructions, workspaceInstructions].filter(Boolean).join("\n\n")
+    const instructions = [coreInstructions(cwd, options.customIdentity), options.instructions, workspaceInstructions].filter(Boolean).join("\n\n")
     return { instructions, tools }
 }
 

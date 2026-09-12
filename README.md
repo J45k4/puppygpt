@@ -214,10 +214,25 @@ Test connection checks bot identity without sending any messages.
 
 Connections are independent of agent sessions. The intended messaging model is
 explicit outbound tools plus opt-in subscriptions to normalized incoming events.
-Saving a connection does not start listeners or send messages. Subscription
+Discord listeners start automatically for connections referenced by an enabled routing
+rule (including wildcard rules), and stop when those rules are disabled or the
+connection is removed. Enable **Message Content Intent** under Bot in the Discord
+Developer Portal. Settings shows listener status, receive/delivery counts, errors,
+and a retry button. Bot and webhook messages are ignored to prevent loops. New
+messages are normalized as `message.created`, with the channel ID in
+`conversation.id` and `conversation.type` set to `guild` or `direct`.
+The receiver reconnects and resumes interrupted sessions; it does not backfill
+history after a server restart. Agents can reply with `discord_send_message` using `integration_id`, `channel_id`,
+`text` (1–2000 characters), and optional `reply_to_message_id`. The tool is limited
+to integration/channel pairs that have routed a message to that chat and are still
+allowed by its routing rules. Incoming prompts explain how to reply. Sends and
+results appear in chat activity; mentions are disabled. The bot needs Send Messages
+and, for replies, Read Message History. Failed or unconfirmed sends are not
+automatically retried. Routing-table `reply` actions remain separate and do not send
+Discord messages. Subscription
 adapters can submit normalized events to the local `/api/routing/events` endpoint;
 the ordered routing table then filters them and delivers selected events to agent
-loops. Telegram and Discord receiver processes are not yet connected.
+loops. Telegram reception is not yet connected.
 
 ### Schedules
 

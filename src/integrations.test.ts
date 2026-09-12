@@ -47,6 +47,54 @@ test("Discord tests use bot authentication and reject non-bot accounts without l
     } finally { db.close(); await rm(root, { recursive: true, force: true }) }
 })
 
+test("integration channels list Discord guild text channels without leaking tokens", async () => {
+    const root = await mkdtemp("/tmp/puppygpt-integrations-")
+    const db = new Database(":memory:")
+    try {
+        const token = "discord.secret.token"
+        const seen: string[] = []
+        const store = new IntegrationStore(db, `${root}/integrations.key`, (async (url: string, init?: RequestInit) => {
+            seen.push(url)
+            expect(new Headers(init?.headers).get("Authorization")).toBe(`Bot ${token}`)
+            if (url === "https://discord.com/api/v10/users/@me/guilds") return Response.json([{ id: "g1", name: "Guild" }])
+            if (url === "https://discord.com/api/v10/guilds/g1/channels") return Response.json([
+                { id: "c1", name: "general", type: 0 },
+                { id: "c2", name: "voice", type: 2 },
+                { id: "c3", name: "news", type: 5 },
+            ])
+            throw new Error("unexpected url")
+        }))
+        const item = store.save({ provider: "discord", name: "Discord", token })
+        expect(await store.channels(item.id)).toEqual([
+            { id: "c1", name: "#general · Guild", kind: "guild" },
+            { id: "c3", name: "#news · Guild", kind: "guild" },
+        ])
+        expect(seen).toHaveLength(2)
+    } finally { db.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+test("integration channels list Telegram recent chats and hide failures", async () => {
+    const root = await mkdtemp("/tmp/puppygpt-integrations-")
+    const db = new Database(":memory:")
+    try {
+        const store = new IntegrationStore(db, `${root}/integrations.key`, (async (url: string) => {
+            expect(url).toContain("/getUpdates")
+            return Response.json({ ok: true, result: [
+                { message: { chat: { id: -100, title: "Group", type: "supergroup" } } },
+                { message: { chat: { id: 42, first_name: "Teppo", type: "private" } } },
+            ] })
+        }))
+        const item = store.save({ provider: "telegram", name: "Telegram", token: "123456:secret-token" })
+        expect(await store.channels(item.id)).toEqual([
+            { id: "-100", name: "Group", kind: "supergroup" },
+            { id: "42", name: "Teppo", kind: "private" },
+        ])
+        const failing = new IntegrationStore(db, `${root}/integrations.key`, (async () => { throw new Error("boom secret-token") }))
+        await expect(failing.channels(item.id)).rejects.toThrow("Could not list channels")
+        try { await failing.channels(item.id) } catch (error) { expect(String(error)).not.toContain("secret-token") }
+    } finally { db.close(); await rm(root, { recursive: true, force: true }) }
+})
+
 test("integration settings API preserves origin checks and returns metadata only", async () => {
     const { ChatStore } = await import("./chats")
     const { createChatApi } = await import("./chat-api")

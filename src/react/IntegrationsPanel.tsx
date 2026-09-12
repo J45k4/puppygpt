@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import type { DiscordStatus } from "../discord"
 import type { Integration } from "../integrations"
 import { RoutingPanel } from "./RoutingPanel"
 async function request<T>(path: string, body?: unknown): Promise<T> {
@@ -9,6 +10,7 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
 }
 export function IntegrationsPanel() {
     const [items, setItems] = useState<Integration[]>([])
+    const [listeners, setListeners] = useState<Record<string, DiscordStatus>>({})
     const [loading, setLoading] = useState(true)
     const [editing, setEditing] = useState<string | null | undefined>()
     const [provider, setProvider] = useState<Integration["provider"]>("telegram")
@@ -20,6 +22,12 @@ export function IntegrationsPanel() {
     const [removing, setRemoving] = useState<string | null>(null)
     const refresh = () => request<Integration[]>("/api/integrations").then(setItems)
     useEffect(() => { void refresh().catch(error => setError(error.message)).finally(() => setLoading(false)) }, [])
+    useEffect(() => {
+        let disposed = false
+        const poll = () => request<Record<string, DiscordStatus>>("/api/integrations/listeners").then(value => { if (!disposed) setListeners(value) }).catch(() => {})
+        void poll(); const timer = setInterval(() => void poll(), 2000)
+        return () => { disposed = true; clearInterval(timer) }
+    }, [])
     const edit = (item?: Integration) => { setEditing(item?.id ?? null); setProvider(item?.provider ?? "telegram"); setName(item?.name ?? ""); setToken(""); setError(""); setStatus("") }
     const save = async () => {
         if (busy) return
@@ -30,11 +38,11 @@ export function IntegrationsPanel() {
         } catch (error) { setError(error instanceof Error ? error.message : "Could not save connection") }
         finally { setBusy(false) }
     }
-    const action = async (item: Integration, action: "test" | "remove") => {
+    const action = async (item: Integration, action: "test" | "remove" | "retry-listener") => {
         setBusy(true); setError(""); setStatus("")
         try {
             await request(`/api/integrations/${item.id}/${action}`, {})
-            await refresh(); setRemoving(null); setStatus(action === "test" ? `${item.name}: connection verified` : "Connection removed")
+            await refresh(); setRemoving(null); setStatus(action === "test" ? `${item.name}: connection verified` : action === "retry-listener" ? "Listener restarting" : "Connection removed")
         } catch (error) { setError(error instanceof Error ? error.message : "Request failed") }
         finally { setBusy(false) }
     }
@@ -44,6 +52,7 @@ export function IntegrationsPanel() {
         {loading ? <p role="status">Loading integrations…</p> : <>
             {items.map(item => <section className="settings-card" key={item.id}>
                 <h3>{item.name}</h3><p className="settings-help">{item.provider === "telegram" ? "Telegram" : "Discord"}{item.identity ? ` · ${item.identity}` : " · Not tested"}</p>
+                {item.provider === "discord" && <p className="settings-help" role="status">Listener: {listeners[item.id]?.state ?? "inactive — enable a routing rule to receive messages"}{listeners[item.id] && ` · Received ${listeners[item.id]!.received} · Deliveries ${listeners[item.id]!.delivered}`}{listeners[item.id]?.lastReceivedAt && ` · Last received ${new Date(listeners[item.id]!.lastReceivedAt!).toLocaleString()}`}{listeners[item.id]?.error && <span className="settings-error"> · {listeners[item.id]!.error}</span>} <button type="button" disabled={busy} onClick={() => void action(item, "retry-listener")}>Retry listener</button></p>}
                 <div className="integration-actions"><button type="button" disabled={busy} onClick={() => edit(item)}>Edit</button><button type="button" disabled={busy} onClick={() => void action(item, "test")}>Test connection</button><button type="button" disabled={busy} onClick={() => setRemoving(item.id)}>Remove</button></div>
                 {removing === item.id && <div className="integration-actions"><span>Remove this saved connection?</span><button type="button" disabled={busy} onClick={() => void action(item, "remove")}>Remove connection</button><button type="button" onClick={() => setRemoving(null)}>Cancel</button></div>}
             </section>)}
@@ -55,7 +64,7 @@ export function IntegrationsPanel() {
                 <p className="settings-help">Stored encrypted. {provider === "telegram" ? <a href="https://core.telegram.org/bots/tutorial#obtain-your-bot-token" target="_blank" rel="noreferrer">Get a Telegram bot token</a> : <a href="https://discord.com/developers/applications" target="_blank" rel="noreferrer">Open Discord Developer Portal</a>}</p>
                 <div className="integration-actions"><button type="button" disabled={busy || !name.trim() || (!editing && !token.trim())} onClick={() => void save()}>{busy ? "Saving…" : "Save connection"}</button><button type="button" onClick={() => { setToken(""); setEditing(undefined) }}>Cancel</button></div>
             </fieldset>}
-            <p className="settings-help">Credentials stay separate from message routing and agent permissions.</p>
+            <p className="settings-help">Discord receives new messages while an enabled routing rule uses the connection. Enable Message Content Intent in Discord Developer Portal → Bot. Telegram reception is not connected yet.</p>
             <RoutingPanel integrations={items} />
         </>}
     </div>

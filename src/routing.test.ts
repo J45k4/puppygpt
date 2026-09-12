@@ -89,7 +89,9 @@ test("a normalized subscription event is delivered into the selected agent loop"
         store.routing.putRule({ name: "Telegram direct", source: { integrationId: "telegram-main" }, when: { op: "eq", field: "conversation.type", value: "direct" }, actions: [{ type: "add_instruction", text: "Treat this as support." }, { type: "deliver", destination: { kind: "chat", chatId: chat.id } }] }, 0)
         const result = await store.routeSubscriptionEvent(event)
         expect(result.delivered).toEqual([chat.id])
+        expect(store.get(chat.id)?.messages[0]?.detail).toContain("Routing instructions:\n- Treat this as support.")
+        expect(store.get(chat.id)?.messages[0]?.detail).toContain('"sender": {')
         await store.settled()
-        expect(store.get(chat.id)?.messages.map(message => [message.role, message.text])).toEqual([["user", "deploy staging please"], ["assistant", "Event handled"]])
+        expect(store.get(chat.id)?.messages.map(message => [message.role, message.text])).toEqual([["user", "telegram · teppo · channel room-1\ndeploy staging please"], ["assistant", "Event handled"]])
     } finally { await store.close(); await rm(root, { recursive: true, force: true }) }
 })

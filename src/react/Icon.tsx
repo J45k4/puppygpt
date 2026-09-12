@@ -1,6 +1,6 @@
 import puppyLogo from "../assets/puppygpt-wizard-logo.png"
 
-export function Icon({ name, size = 20 }: { name: "plus" | "arrow" | "chat" | "folder" | "chevron" | "terminal" | "stop" | "panel" | "check" | "code" | "spark" | "search" | "settings" | "bell" | "copy" | "download" | "plug" | "clock" | "voice", size?: number }) {
+export function Icon({ name, size = 20 }: { name: "plus" | "arrow" | "chat" | "folder" | "chevron" | "terminal" | "stop" | "panel" | "check" | "code" | "spark" | "search" | "settings" | "bell" | "copy" | "download" | "plug" | "clock" | "voice" | "edit", size?: number }) {
     const paths = {
         voice: "M4 10v4M8 6v12M12 3v18M16 8v8M20 10v4",
         clock: "M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z",
@@ -21,6 +21,7 @@ export function Icon({ name, size = 20 }: { name: "plus" | "arrow" | "chat" | "f
         code: "m8 6-6 6 6 6m8-12 6 6-6 6m-3-14-2 16",
         spark: "m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z",
         search: "M16 16l5 5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0",
+        edit: "M4 20h4L19 9l-4-4L4 16v4ZM13 7l4 4",
     }
     return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>
 }
